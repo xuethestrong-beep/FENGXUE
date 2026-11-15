@@ -4,32 +4,33 @@ const path = require("path");
 module.exports = {
   config: {
     name: "leave",
-    version: "7.0-leave.gift",
+    version: "9.0-all-leave",
     author: "FENG",
     category: "events"
   },
 
   onStart: async function ({ threadsData, event, api }) {
     if (event.logMessageType !== "log:unsubscribe") return;
+    
     const { threadID } = event;
+    const leftID = event.logMessageData?.leftParticipantFbId;
+    
+    // Don't send if bot itself left/removed
+    if (!leftID || String(leftID) === String(api.getCurrentUserID())) return;
 
     try {
-      const threadData = await threadsData.get(threadID);
-      if (threadData.settings?.sendLeaveMessage == false) return;
+      // Ignore group setting check so it works even if kicked
+      // const threadData = await threadsData.get(threadID);
+      // if (threadData.settings?.sendLeaveMessage === false) return;
 
-      const leftID = event.logMessageData?.leftParticipantFbId;
-      if (!leftID || String(leftID) === String(api.getCurrentUserID())) return;
-
-      const file = path.join(__dirname, "cache", "leave.gift");
-      const file2 = path.join(__dirname, "../cmds/cache/leave.gift");
-      const file3 = path.join(__dirname, "cache", "gift.mp4");
-      const file4 = path.join(__dirname, "../cmds/cache/gift.mp4");
-
+      const file = path.join(__dirname, "cache", "leave.gif");
+      const file2 = path.join(__dirname, "../cmds/cache/leave.gif");
+      const file3 = path.join(__dirname, "cache", "leave_static.gif");
+      
       let finalFile = null;
       if (await fs.pathExists(file)) finalFile = file;
       else if (await fs.pathExists(file2)) finalFile = file2;
       else if (await fs.pathExists(file3)) finalFile = file3;
-      else if (await fs.pathExists(file4)) finalFile = file4;
 
       if (finalFile) {
         await api.sendMessage({
@@ -38,7 +39,7 @@ module.exports = {
       }
 
     } catch (e) {
-      console.log("[leave.gift]", e.message);
+      console.log("[leave]", e.message);
     }
   }
 };
