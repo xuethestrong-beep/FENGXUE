@@ -2,33 +2,43 @@ const fs = require("fs-extra");
 const path = require("path");
 
 module.exports = {
-  config: { name: "leave", version: "3.4-no-link", author: "FENG", category: "events" },
-  onStart: async function ({ threadsData, event, api, usersData }) {
+  config: {
+    name: "leave",
+    version: "7.0-leave.gift",
+    author: "FENG",
+    category: "events"
+  },
+
+  onStart: async function ({ threadsData, event, api }) {
     if (event.logMessageType !== "log:unsubscribe") return;
     const { threadID } = event;
+
     try {
       const threadData = await threadsData.get(threadID);
-      if (threadData.settings?.sendLeaveMessage === false) return;
+      if (threadData.settings?.sendLeaveMessage == false) return;
 
       const leftID = event.logMessageData?.leftParticipantFbId;
       if (!leftID || String(leftID) === String(api.getCurrentUserID())) return;
 
-      const userName = await usersData.getName(leftID).catch(()=> "Someone");
-      const leaveMsg = `bye ${userName}, NIGGA`;
+      const file = path.join(__dirname, "cache", "leave.gift");
+      const file2 = path.join(__dirname, "../cmds/cache/leave.gift");
+      const file3 = path.join(__dirname, "cache", "gift.mp4");
+      const file4 = path.join(__dirname, "../cmds/cache/gift.mp4");
 
-      const paths = [
-        path.join(__dirname, "cache", "leave.mp4"),
-        path.join(__dirname, "../cmds/cache/leave.mp4"),
-        path.join(__dirname, "cache", "leave.gif"),
-      ];
-      let file = null;
-      for (const p of paths) if (await fs.pathExists(p)) { file = p; break; }
+      let finalFile = null;
+      if (await fs.pathExists(file)) finalFile = file;
+      else if (await fs.pathExists(file2)) finalFile = file2;
+      else if (await fs.pathExists(file3)) finalFile = file3;
+      else if (await fs.pathExists(file4)) finalFile = file4;
 
-      if (file) {
-        await api.sendMessage({ body: leaveMsg, attachment: fs.createReadStream(file) }, threadID);
-      } else {
-        await api.sendMessage(leaveMsg, threadID);
+      if (finalFile) {
+        await api.sendMessage({
+          attachment: fs.createReadStream(finalFile)
+        }, threadID);
       }
-    } catch (e) { console.error("[leave]", e.message); }
+
+    } catch (e) {
+      console.log("[leave.gift]", e.message);
+    }
   }
 };
