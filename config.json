@@ -1,7 +1,7 @@
 {
   "mainThreadId": "1450036443216531",
   "ownerName": "FENG", 
-  "godUID": "61593117279214",
+  "godUID": "61568686580853",
   "notesMainThreadId": "MANDATORY: Set your main thread ID here. Use the 'tid' command to get your thread ID, then paste it here and restart the bot.",
   "botAccount": {
     "email": "",
@@ -45,7 +45,7 @@
     "ignoreCommand": []
   },
   "adminBot": [
-    "61593117279214"
+    "61568686580853"
   ],
   "whiteListMode": {
     "enable": false,
