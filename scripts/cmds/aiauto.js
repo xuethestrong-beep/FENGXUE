@@ -1,5 +1,5 @@
 const axios = require("axios");
-const GROQ_API_KEY = "gsk_ilagay_mo_real_key_mo_dito";
+const GROQ_API_KEY = "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";
 const MODEL = "llama-3.3-70b-versatile";
 const MASTER_IDS = ["61593117279214", "61568686580853"];
 
