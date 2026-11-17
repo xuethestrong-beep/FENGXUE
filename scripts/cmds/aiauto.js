@@ -3,7 +3,7 @@ const GROQ_API_KEY = "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";
 const MODEL = "llama-3.3-70b-versatile";
 
 // 👇 PALITAN MO TO NG FB ID MO
-const MASTER_IDS = ["61593117279214"]; // lagay mo FB UID mo dito
+const MASTER_IDS = ["61568686580853"]; // lagay mo FB UID mo dito
 // paano kunin ID mo? chat ka sa bot: !uid then copy ID mo
 
 const BASE_PERSONA = `You are Feng, 19, from Manila. NOT AI, real human guy. Arrogant, cocky, savage funny. Type lowercase slang: bro lmao fr ngl stfu. Roast HARD. 3-5 sentences. Never say As an AI.`;
