@@ -72,55 +72,50 @@ const HARD = [
 ];
 
 global.quizGame = global.quizGame || new Map();
-global.quizStats = global.quizStats || new Map(); // leaderboard
+global.quizStats = global.quizStats || new Map();
 
 module.exports = {
   config: { 
     name:"quiz", 
-    version:"8.0-leaderboard", 
+    version:"9.0-reply", 
     author:"FENG", 
     category:"game", 
     role:0,
-    guide: "{pn} - start quiz | {pn} top - leaderboard | {pn} stats - your stats"
   },
-
   onStart: async function({ api, event, args, usersData }) {
-    // TOP LEADERBOARD
     if (args[0] && ["top","leaderboard","lb","rank"].includes(args[0].toLowerCase())) {
-      if (global.quizStats.size === 0) return api.sendMessage("📊 No quiz stats yet! Be first to solve.", event.threadID);
+      if (global.quizStats.size === 0) return api.sendMessage("📊 No stats yet!", event.threadID, event.messageID);
       const sorted = [...global.quizStats.entries()].sort((a,b)=>b[1].wins - a[1].wins).slice(0,10);
-      let msg = "🏆 QUIZ LEADERBOARD - TOP 10 GENIUSES 🧠\n\n";
+      let msg = "🏆 QUIZ LEADERBOARD TOP 10 🧠\n\n";
       for (let i=0;i<sorted.length;i++) {
         const [id, data] = sorted[i];
-        const name = await usersData.getName(id).catch(()=> data.name || "Unknown");
-        const medal = i==0?"🥇":i==1?"🥈":i==2?"🥉":`${i+1}.`;
-        msg += `${medal} ${name} - ${data.wins} wins 💰 ${data.totalCoins} coins\n`;
+        const name = await usersData.getName(id).catch(()=> data.name);
+        msg += `${i==0?"🥇":i==1?"🥈":i==2?"🥉":`${i+1}.`} ${name} - ${data.wins} wins\n`;
       }
-      return api.sendMessage(msg, event.threadID);
-    }
-
-    if (args[0] && ["stats","me","my"].includes(args[0].toLowerCase())) {
-      const stats = global.quizStats.get(event.senderID);
-      if (!stats) return api.sendMessage("You haven't won any quiz yet! Type !quiz to start", event.threadID);
-      return api.sendMessage(`📊 YOUR QUIZ STATS\nName: ${await usersData.getName(event.senderID)}\nWins: ${stats.wins}\nTotal Coins: ${stats.totalCoins}\nStreak: ${stats.streak||0}`, event.threadID);
+      return api.sendMessage(msg, event.threadID, event.messageID);
     }
 
     if (global.quizGame.has(event.threadID)) {
       const existing = global.quizGame.get(event.threadID);
       const name = await usersData.getName(existing.authorID);
-      return api.sendMessage(`⚠️ Quiz active! Only ${name} can answer. Wait 30s`, event.threadID, event.messageID);
+      return api.sendMessage(`⚠️ Active quiz for ${name} only! Wait 30s`, event.threadID, event.messageID);
     }
 
     const item = HARD[Math.floor(Math.random()*HARD.length)];
     const timer = setTimeout(()=> { 
       if (!global.quizGame.has(event.threadID)) return;
-      api.sendMessage(`⏰ FAILED - Answer: ${item.a.toUpperCase()} - ${item.o.find(o=>o.toLowerCase().startsWith(item.a))}\n\n❓ was: ${item.q}`, event.threadID);
+      api.sendMessage(`⏰ FAILED - Answer: ${item.a.toUpperCase()}\n❓ was: ${item.q}`, event.threadID);
       global.quizGame.delete(event.threadID);
     }, 30000);
 
     global.quizGame.set(event.threadID, { answer:item.a, timer, reward:150, authorID:event.senderID });
-    const authorName = await usersData.getName(event.senderID);
-    api.sendMessage(`🧠 HARD MODE - 150 coins [${HARD.length} Qs]\n👤 Player: ${authorName} (only you can answer)\n⏱️ 30s\n\n❓ ${item.q}\n\n${item.o.join("\n")}\n\nReply A/B/C`, event.threadID, event.messageID);
+    
+    // THIS LINE MAKES IT REPLY TO THE PERSON
+    return api.sendMessage(
+      `🧠 HARD MODE - 150 coins [${HARD.length} Qs]\n👤 Only you can answer!\n⏱️ 30s\n\n❓ ${item.q}\n\n${item.o.join("\n")}\n\nReply A/B/C`, 
+      event.threadID, 
+      event.messageID // <-- REPLY TO USER'S !quiz MESSAGE
+    );
   },
 
   onChat: async function({ api, event, usersData }) {
@@ -128,38 +123,18 @@ module.exports = {
     if (!game) return;
     const ans = event.body?.trim().toLowerCase();
     if (!["a","b","c"].includes(ans)) return;
-
-    if (String(event.senderID) !== String(game.authorID)) {
-      if (!global.quizGame._lastWarn || Date.now() - global.quizGame._lastWarn > 5000) {
-        global.quizGame._lastWarn = Date.now();
-        const authorName = await usersData.getName(game.authorID);
-        api.sendMessage(`🚫 This quiz is for ${authorName} only! Use !quiz to start your own.`, event.threadID, event.messageID);
-      }
-      return;
-    }
+    if (String(event.senderID) !== String(game.authorID)) return;
 
     if (ans === game.answer) {
       clearTimeout(game.timer);
       global.quizGame.delete(event.threadID);
-      
-      // MONEY + STATS
-      try { 
-        const u = await usersData.get(event.senderID); 
-        await usersData.set(event.senderID, { money:(u.money||0)+game.reward }); 
-      } catch {}
-
-      // LEADERBOARD UPDATE
-      const current = global.quizStats.get(event.senderID) || { wins:0, totalCoins:0, name: await usersData.getName(event.senderID), streak:0 };
-      current.wins += 1;
-      current.totalCoins += game.reward;
-      current.streak = (current.streak||0)+1;
-      current.name = await usersData.getName(event.senderID);
+      try { const u = await usersData.get(event.senderID); await usersData.set(event.senderID, { money:(u.money||0)+game.reward }); } catch {}
+      const current = global.quizStats.get(event.senderID) || { wins:0, totalCoins:0, name: await usersData.getName(event.senderID) };
+      current.wins++; current.totalCoins+=game.reward;
       global.quizStats.set(event.senderID, current);
-
-      const name = await usersData.getName(event.senderID);
-      api.sendMessage(`✅ GENIUS! ${name} solved it!\n+${game.reward} coins! 💰\n🏆 Wins: ${current.wins} | Streak: ${current.streak}`, event.threadID, event.messageID);
+      return api.sendMessage(`✅ Correct! +${game.reward} coins! Wins: ${current.wins}`, event.threadID, event.messageID);
     } else {
-      api.sendMessage(`❌ Wrong! Think harder ${await usersData.getName(event.senderID)}...`, event.threadID, event.messageID);
+      return api.sendMessage(`❌ Wrong! Try again`, event.threadID, event.messageID);
     }
   }
 };
