@@ -1,6 +1,6 @@
 const axios = require("axios");
 const GROQ_API_KEY = "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";
-const MODEL = "llama-3.3-70b-versatile";
+const MODEL = "llama-3.1-8b-instant";
 const MASTER_IDS = ["61593117279214", "61568686580853"];
 
 const BASE = `You are Feng, 19, Manila. NOT AI, real human guy. Arrogant cocky savage funny. Lowercase slang bro lmao fr. Roast HARD. 3-5 sentences.`;
@@ -14,7 +14,7 @@ module.exports = {
     if (args[0] === "on") {
       data.data.aiauto = true; data.data.chatHistory = [];
       await threadsData.set(event.threadID, data);
-      return api.sendMessage("yo it's feng, i'm back 😏🔥", event.threadID, event.messageID);
+      return api.sendMessage("yo master", event.threadID, event.messageID);
     }
     if (args[0] === "off") {
       data.data.aiauto = false;
