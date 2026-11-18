@@ -19,21 +19,21 @@ module.exports = {
     if (args[0] === "off") {
       delete data[event.threadID];
       fs.writeJsonSync(filePath, data);
-      return message.reply("✅ AutoReact 🍑 OFF");
+      return message.reply("✅ OFF");
     }
     let targetID = event.messageReply ? event.messageReply.senderID : Object.keys(event.mentions)[0];
     if (!targetID) return message.reply("Reply to message → !autoreact\n!autoreact off to stop");
     data[event.threadID] = targetID;
     fs.writeJsonSync(filePath, data);
     const info = await api.getUserInfo(targetID);
-    message.reply(`✅ AutoReact ON 🍑\nNow reacting 🍑 to all messages from ${info[targetID].name}`);
+    message.reply(`✅  ${info[targetID].name}`);
   },
   onChat: async function ({ api, event }) {
     try {
       const data = fs.readJsonSync(filePath);
       const targetID = data[event.threadID];
       if (!targetID || event.senderID != targetID) return;
-      api.setMessageReaction("🍑", event.messageID, () => {}, true);
+      api.setMessageReaction("🩷", event.messageID, () => {}, true);
     } catch {}
   }
 };
