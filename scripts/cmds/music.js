@@ -1,17 +1,17 @@
 const fs = require("fs-extra");
 const path = require("path");
 const yts = require("yt-search");
-const ytdl = require("@distube/ytdl-core");
+const { exec } = require("child_process");
+const youtubedl = require("youtube-dl-exec");
 
 module.exports = {
   config: {
     name: "music",
     aliases: ["song", "play"],
-    version: "2.0-cookies",
+    version: "3.0-final",
     author: "Feng",
     role: 0,
-    category: "media",
-    guide: "{pn} song name"
+    category: "media"
   },
 
   onStart: async function ({ api, event, args, message }) {
@@ -22,59 +22,43 @@ module.exports = {
 
     try {
       const search = await yts(query);
-      if (!search.videos.length) {
-        api.unsendMessage(searchMsg.messageID);
-        return message.reply("❌ No results");
-      }
-
       const video = search.videos[0];
-      const url = video.url;
-
-      // COOKIES PATH
-      const cookiePath = path.join(process.cwd(), "yt_cookies.txt");
-      const hasCookies = fs.existsSync(cookiePath);
-
-      // SETUP AGENT WITH COOKIES
-      const agent = hasCookies ? ytdl.createAgent(JSON.parse(fs.readFileSync(cookiePath, "utf8").includes("youtube.com") ? "[]" : "[]"), { 
-        lang: "en-US" 
-      }) : undefined;
-
-      // If using cookies.txt file, use ytdl with cookie file directly
-      const options = hasCookies ? {
-        filter: "audioonly",
-        quality: "highestaudio",
-        requestOptions: {
-          headers: {
-            cookie: fs.readFileSync(cookiePath, "utf8"),
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-          }
-        }
-      } : { filter: "audioonly", quality: "highestaudio" };
+      if (!video) throw new Error("No results");
 
       const cache = path.join(__dirname, "cache");
-      fs.ensureDirSync(cache);
+      await fs.ensureDir(cache);
       const filePath = path.join(cache, `music_${Date.now()}.mp3`);
 
-      // DOWNLOAD USING YTDL
-      await new Promise((resolve, reject) => {
-        ytdl(url, options)
-          .pipe(fs.createWriteStream(filePath))
-          .on("finish", resolve)
-          .on("error", reject);
+      const cookiePath = path.join(process.cwd(), "yt_cookies.txt");
+      
+      // DOWNLOAD
+      await youtubedl(video.url, {
+        extractAudio: true,
+        audioFormat: "mp3",
+        audioQuality: 0,
+        output: filePath,
+        cookies: fs.existsSync(cookiePath) ? cookiePath : undefined,
+        noWarnings: true,
+        noCheckCertificate: true,
+        addHeader: ["user-agent: Mozilla/5.0"]
       });
 
+      // AUTO DELETE SEARCHING
       api.unsendMessage(searchMsg.messageID);
 
+      if (!fs.existsSync(filePath)) throw new Error("Download failed");
+
       return api.sendMessage({
-        body: `🎵 ${video.title}\n⏱️ ${video.timestamp}\n${hasCookies ? "🍪 cookies: ON" : "⚠️ cookies not found"}`,
+        body: `🎵 ${video.title}`,
         attachment: fs.createReadStream(filePath)
       }, event.threadID, () => {
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       }, event.messageID);
 
     } catch (e) {
-      api.unsendMessage(searchMsg.messageID);
-      return message.reply(`❌ ${e.message}\nCheck yt_cookies.txt`);
+      // AUTO DELETE EVEN ON ERROR
+      try { api.unsendMessage(searchMsg.messageID); } catch {}
+      return message.reply(`❌ ${e.message}\n\nCheck:\n1. yt_cookies.txt in root\n2. npm install youtube-dl-exec yt-search fs-extra`);
     }
   }
 };
