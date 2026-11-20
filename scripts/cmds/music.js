@@ -1,7 +1,6 @@
 const fs = require("fs-extra");
 const path = require("path");
 const yts = require("yt-search");
-const { exec } = require("child_process");
 const youtubedl = require("youtube-dl-exec");
 
 module.exports = {
@@ -13,7 +12,6 @@ module.exports = {
     role: 0,
     category: "media"
   },
-
   onStart: async function ({ api, event, args, message }) {
     const query = args.join(" ");
     if (!query) return message.reply("🎵 music <name>");
@@ -28,10 +26,8 @@ module.exports = {
       const cache = path.join(__dirname, "cache");
       await fs.ensureDir(cache);
       const filePath = path.join(cache, `music_${Date.now()}.mp3`);
-
       const cookiePath = path.join(process.cwd(), "yt_cookies.txt");
-      
-      // DOWNLOAD
+
       await youtubedl(video.url, {
         extractAudio: true,
         audioFormat: "mp3",
@@ -39,11 +35,9 @@ module.exports = {
         output: filePath,
         cookies: fs.existsSync(cookiePath) ? cookiePath : undefined,
         noWarnings: true,
-        noCheckCertificate: true,
-        addHeader: ["user-agent: Mozilla/5.0"]
+        noCheckCertificate: true
       });
 
-      // AUTO DELETE SEARCHING
       api.unsendMessage(searchMsg.messageID);
 
       if (!fs.existsSync(filePath)) throw new Error("Download failed");
@@ -56,9 +50,8 @@ module.exports = {
       }, event.messageID);
 
     } catch (e) {
-      // AUTO DELETE EVEN ON ERROR
       try { api.unsendMessage(searchMsg.messageID); } catch {}
-      return message.reply(`❌ ${e.message}\n\nCheck:\n1. yt_cookies.txt in root\n2. npm install youtube-dl-exec yt-search fs-extra`);
+      return message.reply(`❌ ${e.message}`);
     }
   }
 };
