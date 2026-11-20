@@ -1,88 +1,107 @@
-const fs = require("fs-extra");
-const path = require("path");
-const play = require("play-dl");
+const axios = require("axios");
 const yts = require("yt-search");
-const ytdl = require("@distube/ytdl-core");
+const fs = require("fs");
+const path = require("path");
 
-function parseCookies(filePath) {
-  if (!fs.existsSync(filePath)) return "";
-  const content = fs.readFileSync(filePath, "utf8");
-  if (!content.includes("\t")) return content.replace(/[\r\n]+/g, "").trim();
-  const cookies = [];
-  for (const line of content.split("\n")) {
-    if (!line || line.startsWith("#") || line.trim() == "") continue;
-    const parts = line.trim().split("\t");
-    if (parts.length >= 7) cookies.push(`${parts[5]}=${parts[6]}`);
+const CACHE_DIR = path.join(__dirname, "cache");
+const API_TIMEOUT = 60000;
+const MAX_AUDIO_SIZE = 25 * 1024 * 1024;
+
+const http = axios.create({ 
+  timeout: API_TIMEOUT, 
+  headers: { "User-Agent": "Mozilla/5.0" } 
+});
+
+// FREE API THAT BYPASSES YOUTUBE BLOCK - no cookies needed
+const API_BASE = "https://api.ryzumi.vip"; // change if down, use backup below
+
+async function safeUnsend(message, messageID) {
+  if (!messageID) return;
+  try { await message.unsend(messageID); } catch {}
+}
+function removeFile(file) {
+  try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch {}
+}
+
+async function downloadAudio(url) {
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+  const file = path.join(CACHE_DIR, `music_${Date.now()}.mp3`);
+  try {
+    const res = await http.get(url, { responseType: "arraybuffer", maxContentLength: MAX_AUDIO_SIZE, maxBodyLength: MAX_AUDIO_SIZE });
+    const data = Buffer.from(res.data);
+    if (!data.length) throw new Error("Empty file");
+    if (String(res.headers["content-type"]||"").includes("text/html")) throw new Error("API returned webpage");
+    fs.writeFileSync(file, data);
+    return file;
+  } catch (e) {
+    removeFile(file);
+    throw e;
   }
-  return cookies.join("; ");
+}
+
+async function getDownloadURL(videoURL) {
+  // TRY 1: ryzumi api
+  try {
+    const r = await http.get(`${API_BASE}/api/downloader/ytmp3?url=${encodeURIComponent(videoURL)}`);
+    if (r.data?.url || r.data?.data?.url) return r.data.url || r.data.data.url;
+    if (r.data?.downloadUrl) return r.data.downloadUrl;
+  } catch {}
+  
+  // TRY 2: backup - siputzx api (very stable)
+  try {
+    const r = await http.get(`https://api.siputzx.my.id/api/d/ytmp3?url=${encodeURIComponent(videoURL)}`);
+    if (r.data?.data?.dl) return r.data.data.dl;
+  } catch {}
+
+  // TRY 3: your old ST api if you have it
+  try {
+    const stapi = new global.utils.STBotApis();
+    const first = await http.post(`${stapi.baseURL}/st/ytviddl`, { url: videoURL });
+    const formats = first.data?.formats || [];
+    const audio = formats.find(f=>f.ext==="mp3") || formats[0];
+    if (!audio) throw new Error();
+    const second = await http.post(`${stapi.baseURL}/st/ytviddl`, { url: videoURL, formatUrl: audio.url });
+    return second.data?.downloadUrl || second.data?.url;
+  } catch {}
+
+  throw new Error("All download APIs failed, try again");
 }
 
 module.exports = {
   config: {
     name: "music",
     aliases: ["song", "play"],
-    version: "7.0-hybrid",
-    author: "Feng",
+    version: "9.0-api-bypass",
+    author: "Feng - fixed from ST",
     role: 0,
-    category: "media"
+    category: "music"
   },
-  onStart: async function ({ api, event, args, message }) {
-    const query = args.join(" ");
-    if (!query) return message.reply("🎵 music <name>");
-    let searchMsg;
-    try { searchMsg = await message.reply(`🔍 Searching "${query}"...`); } catch {}
+  onStart: async function({ api, event, args, message }) {
+    const query = args.join(" ").trim();
+    if (!query) return message.reply("🎵 music <song name>");
 
+    const searching = await message.reply(`🔍 Searching "${query}"...`);
     try {
-      await play.getFreeClientID().catch(()=>{});
-      const cookiePath = path.join(process.cwd(), "yt_cookies.txt");
-      const cookieString = parseCookies(cookiePath);
-      if (cookieString) await play.setToken({ youtube: { cookie: cookieString } }).catch(()=>{});
-
-      let video = null;
-      try {
-        const res = await play.search(query, { limit: 1, source: { youtube: "video" } });
-        if (res[0]) video = { url: res[0].url, title: res[0].title, duration: res[0].durationRaw };
-      } catch {}
-      if (!video) {
-        const s = await yts(query);
-        if (s.videos[0]) video = { url: s.videos[0].url, title: s.videos[0].title, duration: s.videos[0].timestamp };
-      }
+      const search = await yts(query);
+      const video = search.videos[0];
       if (!video) throw new Error("No results");
 
-      const cache = path.join(__dirname, "cache");
-      await fs.ensureDir(cache);
-      const filePath = path.join(cache, `music_${Date.now()}.mp3`);
+      await safeUnsend(message, searching.messageID);
+      const proc = await message.reply(`⬇️ Processing: ${video.title}`);
 
-      // DOWNLOAD WITH ytdl-core (fixes Invalid URL)
-      await new Promise((resolve, reject) => {
-        ytdl(video.url, {
-          filter: "audioonly",
-          quality: "highestaudio",
-          requestOptions: {
-            headers: {
-              cookie: cookieString,
-              "User-Agent": "Mozilla/5.0"
-            }
-          }
-        })
-        .pipe(fs.createWriteStream(filePath))
-        .on("finish", resolve)
-        .on("error", reject);
-        setTimeout(() => reject(new Error("Timeout 60s - cookies may be expired")), 60000);
-      });
+      const dlUrl = await getDownloadURL(video.url);
+      const file = await downloadAudio(dlUrl);
 
-      try { api.unsendMessage(searchMsg.messageID); } catch {}
+      await safeUnsend(message, proc.messageID);
 
       return api.sendMessage({
-        body: `🎵 ${video.title}\n⏱️ ${video.duration}`,
-        attachment: fs.createReadStream(filePath)
-      }, event.threadID, () => {
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      }, event.messageID);
+        body: `🎶 ${video.title}\n👤 ${video.author.name}\n⏱ ${video.timestamp}`,
+        attachment: fs.createReadStream(file)
+      }, event.threadID, () => removeFile(file), event.messageID);
 
     } catch (e) {
-      try { if (searchMsg) api.unsendMessage(searchMsg.messageID); } catch {}
-      console.error(e);
+      await safeUnsend(message, searching.messageID);
+      console.log("[MUSIC]", e.message);
       return message.reply(`❌ ${e.message}`);
     }
   }
