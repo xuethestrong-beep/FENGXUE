@@ -3,11 +3,32 @@ const path = require("path");
 const play = require("play-dl");
 const yts = require("yt-search");
 
+function parseCookies(filePath) {
+  if (!fs.existsSync(filePath)) return "";
+  const content = fs.readFileSync(filePath, "utf8");
+  // If already header format (no tabs), clean it
+  if (!content.includes("\t")) {
+    return content.replace(/[\r\n]+/g, "").trim();
+  }
+  // Netscape format -> cookie header
+  const cookies = [];
+  for (const line of content.split("\n")) {
+    if (!line || line.startsWith("#") || line.trim() == "") continue;
+    const parts = line.trim().split("\t");
+    if (parts.length >= 7) {
+      const name = parts[5];
+      const value = parts[6];
+      if (name && value) cookies.push(`${name}=${value}`);
+    }
+  }
+  return cookies.join("; ");
+}
+
 module.exports = {
   config: {
     name: "music",
     aliases: ["song", "play"],
-    version: "6.0-final-fix",
+    version: "6.1-cookie-parser",
     author: "Feng",
     role: 0,
     category: "media"
@@ -20,51 +41,40 @@ module.exports = {
     try { searchMsg = await message.reply(`🔍 Searching "${query}"...`); } catch {}
 
     try {
-      // INIT play-dl (fixes No results on Railway)
-      try {
-        await play.getFreeClientID();
-        await play.setToken({ youtube: { cookie: "" } });
-      } catch {}
+      await play.getFreeClientID().catch(()=>{});
 
       const cookiePath = path.join(process.cwd(), "yt_cookies.txt");
-      let cookieString = "";
-      if (fs.existsSync(cookiePath)) {
-        cookieString = fs.readFileSync(cookiePath, "utf8");
-        if (cookieString) {
-          await play.setToken({ youtube: { cookie: cookieString } }).catch(()=>{});
-        }
+      const cookieString = parseCookies(cookiePath);
+      
+      if (cookieString) {
+        await play.setToken({ youtube: { cookie: cookieString } }).catch(()=>{});
       }
 
       let video = null;
 
-      // TRY 1: play-dl search
       try {
         const res = await play.search(query, { limit: 1, source: { youtube: "video" } });
         if (res[0]) video = { url: res[0].url, title: res[0].title, duration: res[0].durationRaw };
-      } catch (e) { console.log("play search fail", e.message); }
+      } catch {}
 
-      // TRY 2: yt-search fallback
       if (!video) {
-        try {
-          const s = await yts(query);
-          if (s.videos[0]) video = { url: s.videos[0].url, title: s.videos[0].title, duration: s.videos[0].timestamp };
-        } catch {}
+        const s = await yts(query);
+        if (s.videos[0]) video = { url: s.videos[0].url, title: s.videos[0].title, duration: s.videos[0].timestamp };
       }
 
-      if (!video) throw new Error(`No results for "${query}" - YouTube blocked search`);
+      if (!video) throw new Error("No results");
 
       const cache = path.join(__dirname, "cache");
       await fs.ensureDir(cache);
       const filePath = path.join(cache, `music_${Date.now()}.mp3`);
 
-      // DOWNLOAD
-      const stream = await play.stream(video.url, { quality: 2 });
+      const stream = await play.stream(video.url);
       await new Promise((resolve, reject) => {
         const write = fs.createWriteStream(filePath);
         stream.stream.pipe(write);
         write.on("finish", resolve);
         write.on("error", reject);
-        setTimeout(() => reject(new Error("Timeout 60s")), 60000);
+        setTimeout(() => reject(new Error("Timeout")), 60000);
       });
 
       try { api.unsendMessage(searchMsg.messageID); } catch {}
