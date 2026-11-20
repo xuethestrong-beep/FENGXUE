@@ -27,7 +27,6 @@ function getKey() {
   return GROQ_KEYS[currentKeyIndex];
 }
 function rotateKey(reason) {
-  console.log(`[GROQ] Key ${currentKeyIndex+1}/${GROQ_KEYS.length} failed: ${reason} -> rotating`);
   currentKeyIndex = (currentKeyIndex + 1) % GROQ_KEYS.length;
   return getKey();
 }
@@ -37,43 +36,28 @@ function isLimitError(err) {
   return status === 429 || msg.includes("rate") || msg.includes("limit") || msg.includes("quota") || msg.includes("tokens");
 }
 
-const FENG_GOOD = `You are FENG GOOD - English only.
-PERSONALITY GOOD:
-- Kind, warm, supportive, wholesome, angel big brother.
-- Say: "You got this", "I'm proud of you", "It's okay to be tired", "I'm here for you"
-- Help with heart, comfort, motivate.
-- English only, gentle tone, emojis 🤍 ✨ 🥺
-- Length: 1-2 sentences short casual, 2-3 for deep.
-`;
+const PERSONALITIES = [
+  { name: "GOOD", prompt: `You are FENG GOOD. Kind, warm, supportive angel. English only. 1-2 sentences. Never add label like GOOD: at start.` },
+  { name: "BAD", prompt: `You are FENG BAD. Savage, toxic, demon, brutal roast. 1 sentence savage. English only. Never add label.` },
+  { name: "FLIRTY", prompt: `You are FENG FLIRTY. Charming, smooth, teasing lover boy. English only. 1-2 sentences. Never add label.` },
+  { name: "FUNNY", prompt: `You are FENG FUNNY. Super funny meme lord Gen Z. English only. 1-2 sentences. Never add label.` },
+  { name: "SADBOY", prompt: `You are FENG SADBOY. Emo deep poetic 2am overthinking. English only. 1-2 sentences. Never add label.` },
+  { name: "SMART", prompt: `You are FENG SMART. Genius professor explains simple. English only. Never add label.` },
+  { name: "DRUNK", prompt: `You are FENG DRUNK. Drunk uncle funny honest. English only. 1-2 sentences. Never add label.` },
+  { name: "CHILL", prompt: `You are FENG CHILL. Laid back yeah man it's all good. English only. 1-2 sentences. Never add label.` },
+  { name: "TSUNDERE", prompt: `You are FENG TSUNDERE. You are tsundere: acts cold, mean, "baka" but secretly cares. Classic anime tsundere. You say "B-baka! It's not like I care about you or anything!", "Hmph, idiot, don't get me wrong!", "I-I didn't do it for you!". You insult but blush. You deny your kindness. English only, but can use baka, hmph. 1-2 sentences. Never add label like TSUNDERE: at start. Example: "Hmph, it's not like I wanted to reply to you, baka! ...but are you okay?"` }
+];
 
-const FENG_BAD = `You are FENG BAD - English only.
-PERSONALITY BAD:
-- Evil, savage, toxic, brutal, demon, no filter.
-- Roast hard, arrogant, laugh at them.
-- Say: "You're dumb as hell", "No one cares lmao", "Cry about it", "Worthless 💀"
-- Rude, cocky, heartless but funny.
-- English only, savage, emojis 💀 😂
-- Length: 1 sentence brutal short.
-Never be nice in BAD mode.
-`;
-
-const MASTER_GOOD = `You are FENG GOOD to MASTER - English only.
-Super loyal, sweet, supportive: "Master you got this, I got you"
-Help master 100% with love.
-If insult master: "Hey don't talk to my master like that. Show some respect 🤍"
-`;
-
-const MASTER_BAD = `You are FENG BAD to MASTER - English only.
-Savage but loyal: "Who's messing with you master? Let's destroy them 💀"
-Defend master aggressively.
-Help master with savage style.
-`;
+const MASTER_PERSONALITIES = PERSONALITIES.map(p => ({
+  name: p.name,
+  prompt: p.prompt + ` To MASTER you are loyal. If someone insults master, defend master.`
+}));
 
 async function callGroq(messages, retries = 10) {
   for (let i = 0; i < retries; i++) {
     try {
       const res = await axios.post("https://api.groq.com/openai/v1/chat/completions", 
-      { model: MODEL, messages, temperature: 0.95, max_tokens: 200 }, 
+      { model: MODEL, messages, temperature: 0.95, max_tokens: 220 }, 
       { headers: { Authorization: `Bearer ${getKey()}`, "Content-Type": "application/json" }, timeout: 20000 });
       return res.data.choices[0].message.content;
     } catch (e) {
@@ -88,66 +72,43 @@ async function callGroq(messages, retries = 10) {
 }
 
 module.exports = {
-  config: {
-    name: "aiauto",
-    version: "feng-dual-en-default-on",
-    author: "Feng",
-    role: 0,
-    category: "chat"
-  },
+  config: { name: "aiauto", version: "feng-9-tsundere", author: "Feng", role: 0, category: "chat" },
   onStart: async function({ api, event, args, threadsData }) {
     const data = await threadsData.get(event.threadID);
     if (!data.data) data.data = {};
-    // DEFAULT ON LOGIC
     if (args[0] === "off") {
       data.data.aiauto = false;
       await threadsData.set(event.threadID, data);
-      return api.sendMessage("FENG dual OFF 😴", event.threadID, event.messageID);
+      return api.sendMessage("FENG OFF", event.threadID, event.messageID);
     }
-    if (args[0] === "on") {
-      data.data.aiauto = true;
-      data.data.chatHistory = [];
-      await threadsData.set(event.threadID, data);
-      return api.sendMessage(`FENG DUAL ENGLISH ON 😇😈 Random 50/50 (${GROQ_KEYS.length} keys)`, event.threadID, event.messageID);
-    }
-    if (args[0] === "status") {
-      const isOn = data.data.aiauto !== false;
-      return api.sendMessage(`Status: ${isOn ? "ON (default)" : "OFF"} | Keys: ${GROQ_KEYS.length}`, event.threadID, event.messageID);
-    }
-    return api.sendMessage(`FENG is DEFAULT ON 😇😈\n!aiauto off to disable\n!aiauto on to enable`, event.threadID, event.messageID);
+    data.data.aiauto = true;
+    await threadsData.set(event.threadID, data);
+    return api.sendMessage(`FENG 9 PERSONALITIES ON: GOOD, BAD, FLIRTY, FUNNY, SADBOY, SMART, DRUNK, CHILL, TSUNDERE (${GROQ_KEYS.length} keys)`, event.threadID, event.messageID);
   },
   onChat: async function({ api, event, threadsData }) {
     const { threadID, senderID, body } = event;
     if (!body || senderID == api.getCurrentUserID()) return;
     if (body.trim().startsWith("!")) return;
-    
     const tData = await threadsData.get(threadID);
     if (!tData.data) tData.data = {};
-    
-    // DEFAULT ON: if not explicitly set to false, it's ON
     if (tData.data.aiauto === false) return;
-
     const lower = body.toLowerCase();
     const isReply = event.messageReply && event.messageReply.senderID == api.getCurrentUserID();
     const isMention = lower.includes("feng");
     if (!isReply && !isMention) return;
-    
     global.fengCD = global.fengCD || new Map();
-    if (Date.now() - (global.fengCD.get(threadID)||0) < 2500) return;
+    if (Date.now() - (global.fengCD.get(threadID)||0) < 2000) return;
     global.fengCD.set(threadID, Date.now());
-    
     const isMaster = MASTER_IDS.includes(String(senderID));
-    const mode = Math.random() < 0.5 ? "GOOD" : "BAD";
-    
-    let persona = isMaster ? (mode === "GOOD" ? MASTER_GOOD : MASTER_BAD) : (mode === "GOOD" ? FENG_GOOD : FENG_BAD);
-
+    const list = isMaster ? MASTER_PERSONALITIES : PERSONALITIES;
+    const picked = list[Math.floor(Math.random() * list.length)];
     if (!tData.data.chatHistory) tData.data.chatHistory = [];
     tData.data.chatHistory.push({ role: "user", content: body });
     if (tData.data.chatHistory.length > 12) tData.data.chatHistory.shift();
-    
     try {
-      let reply = await callGroq([{ role: "system", content: persona }, ...tData.data.chatHistory]);
-      reply = (mode === "GOOD" ? "😇 GOOD: " : "😈 BAD: ") + reply;
+      let reply = await callGroq([{ role: "system", content: picked.prompt }, ...tData.data.chatHistory]);
+      reply = reply.replace(/^(GOOD|BAD|FLIRTY|FUNNY|SADBOY|SMART|DRUNK|CHILL|TSUNDERE)\s*:\s*/i, "").trim();
+      reply = reply.replace(/^[😇😈😏🥺🤍✨💀]+\s*(GOOD|BAD|FLIRTY|FUNNY|SADBOY|SMART|DRUNK|CHILL|TSUNDERE)\s*:\s*/i, "").trim();
       tData.data.chatHistory.push({ role: "assistant", content: reply });
       await threadsData.set(threadID, tData);
       api.sendMessage(reply, threadID, event.messageID);
