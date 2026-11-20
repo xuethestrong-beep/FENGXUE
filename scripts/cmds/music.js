@@ -1,14 +1,12 @@
 const fs = require("fs-extra");
 const path = require("path");
-const yts = require("yt-search");
-const ytdl = require("@distube/ytdl-core");
 const play = require("play-dl");
 
 module.exports = {
   config: {
     name: "music",
     aliases: ["song", "play"],
-    version: "4.0-railway-fix",
+    version: "5.0-final-railway",
     author: "Feng",
     role: 0,
     category: "media"
@@ -17,73 +15,51 @@ module.exports = {
     const query = args.join(" ");
     if (!query) return message.reply("🎵 music <name>");
 
-    const searchMsg = await message.reply(`🔍 Searching "${query}"...`);
+    let searchMsg;
+    try {
+      searchMsg = await message.reply(`🔍 Searching "${query}"...`);
+    } catch {}
 
     try {
-      let videoUrl, videoTitle, videoTime;
+      // SEARCH with play-dl
+      const results = await play.search(query, { limit: 1, source: { youtube: "video" } });
+      if (!results.length) throw new Error("No results");
 
-      // TRY 1: yt-search
-      try {
-        const search = await yts(query);
-        if (search.videos.length > 0) {
-          videoUrl = search.videos[0].url;
-          videoTitle = search.videos[0].title;
-          videoTime = search.videos[0].timestamp;
-        }
-      } catch {}
-
-      // TRY 2: play-dl fallback (works on Railway)
-      if (!videoUrl) {
-        const results = await play.search(query, { limit: 1, source: { youtube: "video" } });
-        if (results.length > 0) {
-          videoUrl = results[0].url;
-          videoTitle = results[0].title;
-          videoTime = results[0].durationRaw;
-        }
-      }
-
-      if (!videoUrl) throw new Error("No results - try more specific title");
-
+      const video = results[0];
       const cache = path.join(__dirname, "cache");
       await fs.ensureDir(cache);
       const filePath = path.join(cache, `music_${Date.now()}.mp3`);
 
+      // COOKIES
       const cookiePath = path.join(process.cwd(), "yt_cookies.txt");
-      let cookieString = "";
       if (fs.existsSync(cookiePath)) {
-        cookieString = fs.readFileSync(cookiePath, "utf8");
+        const cookies = fs.readFileSync(cookiePath, "utf8");
+        // play-dl uses youtube cookie
+        await play.setToken({ youtube: { cookie: cookies } }).catch(() => {});
       }
 
+      // DOWNLOAD with play-dl stream (works on Railway)
+      const stream = await play.stream(video.url, { quality: 2 });
       await new Promise((resolve, reject) => {
-        ytdl(videoUrl, {
-          filter: "audioonly",
-          quality: "highestaudio",
-          requestOptions: {
-            headers: {
-              cookie: cookieString,
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-            }
-          }
-        })
-        .pipe(fs.createWriteStream(filePath))
-        .on("finish", resolve)
-        .on("error", reject);
+        const write = fs.createWriteStream(filePath);
+        stream.stream.pipe(write);
+        write.on("finish", resolve);
+        write.on("error", reject);
+        setTimeout(() => reject(new Error("Download timeout")), 60000);
       });
 
-      api.unsendMessage(searchMsg.messageID);
-
-      if (!fs.existsSync(filePath)) throw new Error("Download failed");
+      try { api.unsendMessage(searchMsg.messageID); } catch {}
 
       return api.sendMessage({
-        body: `🎵 ${videoTitle}\n⏱️ ${videoTime || ""}`,
+        body: `🎵 ${video.title}\n⏱️ ${video.durationRaw}`,
         attachment: fs.createReadStream(filePath)
       }, event.threadID, () => {
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
       }, event.messageID);
 
     } catch (e) {
-      try { api.unsendMessage(searchMsg.messageID); } catch {}
-      return message.reply(`❌ ${e.message}\n\nTip: yt-search blocked on Railway, using play-dl now.`);
+      try { if (searchMsg) api.unsendMessage(searchMsg.messageID); } catch {}
+      return message.reply(`❌ ${e.message}\nCheck yt_cookies.txt in root`);
     }
   }
 };
