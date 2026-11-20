@@ -1,13 +1,13 @@
 const fs = require("fs-extra");
 const path = require("path");
 const yts = require("yt-search");
-const youtubedl = require("youtube-dl-exec");
+const ytdl = require("@distube/ytdl-core");
 
 module.exports = {
   config: {
     name: "music",
     aliases: ["song", "play"],
-    version: "3.0-final",
+    version: "3.1-railway",
     author: "Feng",
     role: 0,
     category: "media"
@@ -26,21 +26,31 @@ module.exports = {
       const cache = path.join(__dirname, "cache");
       await fs.ensureDir(cache);
       const filePath = path.join(cache, `music_${Date.now()}.mp3`);
-      const cookiePath = path.join(process.cwd(), "yt_cookies.txt");
 
-      await youtubedl(video.url, {
-        extractAudio: true,
-        audioFormat: "mp3",
-        audioQuality: 0,
-        output: filePath,
-        cookies: fs.existsSync(cookiePath) ? cookiePath : undefined,
-        noWarnings: true,
-        noCheckCertificate: true
+      const cookiePath = path.join(process.cwd(), "yt_cookies.txt");
+      let cookieString = "";
+      if (fs.existsSync(cookiePath)) {
+        cookieString = fs.readFileSync(cookiePath, "utf8");
+      }
+
+      // DOWNLOAD WITH YTDL + COOKIES
+      await new Promise((resolve, reject) => {
+        const stream = ytdl(video.url, {
+          filter: "audioonly",
+          quality: "highestaudio",
+          requestOptions: {
+            headers: {
+              cookie: cookieString,
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+          }
+        });
+        stream.pipe(fs.createWriteStream(filePath))
+          .on("finish", resolve)
+          .on("error", reject);
       });
 
       api.unsendMessage(searchMsg.messageID);
-
-      if (!fs.existsSync(filePath)) throw new Error("Download failed");
 
       return api.sendMessage({
         body: `🎵 ${video.title}`,
