@@ -1,65 +1,102 @@
 module.exports = {
   config: {
     name: "tax",
-    version: "1.7",
-    author: "FENG",
+    version: "1.8",
+    author: "FENG (fixed)",
     countDown: 5,
     role: 0,
     description: "Check tax fee",
     category: "economy",
     guide: "{pn} <amount>"
   },
-
   onStart: async function ({ message, args }) {
-    // ===== MONEY FORMATTER - 1B 1T 1Qa =====
-    const SUFFIXES = ["", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "De", "Ud", "Dd", "Td", "Qad", "Qid", "Sxd", "Spd", "Od", "Nd", "Vg", "Uv", "Dv", "Tv", "Qav", "Qiv", "SxV", "SpV", "OcV", "NoV", "Tg"];
-    const SUFFIX_MAP = { k: 3, m: 6, b: 9, t: 12, qa: 15, qi: 18, sx: 21, sp: 24, oc: 27, no: 30, de: 33, ud: 36, dd: 39, td: 42, qad: 45, qid: 48, sxd: 51, spd: 54, od: 57, nd: 60, vg: 63 };
-
-    const cleanMoney = (val) => {
-      if (val == null) return 0;
-      let str = String(val).replace(/[^0-9.-]/g, "");
-      if (str.length > 18 || str.includes("929292929")) return 0;
-      let num = Number(str);
-      if (!isFinite(num) || isNaN(num) || num < 0) return 0;
-      return Math.floor(num);
+    // ===== MONEY FORMATTER - BigInt - UP TO Cg - NO RETURN 0 =====
+    const SUFFIXES = [
+      "", "K", "M", "B", "T",
+      "Qa", "Qi", "Sx", "Sp", "Oc", "No", "De", "Ud", "Dd", "Td",
+      "Qad", "Qid", "Sxd", "Spd", "Od", "Nd",
+      "Vg", "Uv", "Dv", "Tv", "Qav", "Qiv", "Sxv", "Spv", "Ocv", "Nov",
+      "Tg",
+      "Uag", "Dag", "Trg", "Qag", "Qig", "Sxg", "Spg", "Ocg", "Nog", "Deg",
+      "Udg", "Ddg", "Tdg", "Qadg", "Qidg", "Sxdg", "Spdg", "Odg", "Ndg",
+      "VgG", "Uvg", "Dvg", "Tvg", "Qavg", "Qivg", "Sxvg", "Spvg", "Ovg", "Nvg",
+      "TgG",
+      "Uatg", "Datg", "Trtg", "Qatg", "Qitg", "Sxtg", "Sptg", "Octg", "Notg", "Detg",
+      "Udtg", "Ddtg", "Tdtg", "Qadtg", "Qidtg", "Sxdtg", "Spdtg", "Odtg", "Ndtg",
+      "Vtg", "Uvtg", "Dvtg", "Tvtg", "Qavtg", "Qivtg", "Sxvtg", "Spvtg", "Ocvtg", "Novtg",
+      "Ttg",
+      "Uaog", "Daog", "Trog", "Qaog", "Qiog", "Sxog", "Spog", "Ocog", "Noog", "Deog",
+      "Udog", "Ddog", "Tdog", "Qadog", "Qidog", "Sxdog", "Spdog", "Odog", "Ndog",
+      "Cg"
+    ];
+    const toBigInt = (val) => {
+      if (val == null) return 0n;
+      try {
+        let s = String(val).trim().replace(/,/g, "").replace(/_/g, "").replace(/\$/g, "").replace(/@/g, "");
+        if (s === "" || s === "-") return 0n;
+        if (s.includes("e") || s.includes("E")) {
+          let [mant, exp] = s.toLowerCase().split("e");
+          let expNum = parseInt(exp);
+          let mantClean = mant.replace(".", "");
+          let dotPos = mant.includes(".") ? mant.split(".")[1].length : 0;
+          let big = BigInt(mantClean);
+          let pow = BigInt(expNum - dotPos);
+          if (pow < 0n) return big / (10n ** -pow);
+          return big * (10n ** pow);
+        }
+        let match = s.match(/^(\d+(?:\.\d+)?)([a-zA-Z]+)?$/);
+        if (match) {
+          let numPart = match[1];
+          let suffix = match[2] ? match[2].toLowerCase() : "";
+          if (!suffix) return BigInt(numPart.split(".")[0]); // plain 999999999999999999
+          let idx = SUFFIXES.findIndex(x => x.toLowerCase() === suffix);
+          if (idx > 0) {
+            let [whole, dec = ""] = numPart.split(".");
+            let base = BigInt(whole + dec);
+            let pow = BigInt(idx * 3 - dec.length);
+            if (pow < 0n) return base / (10n ** -pow);
+            return base * (10n ** pow);
+          }
+          return 0n;
+        }
+        s = s.replace(/[^0-9-]/g, "");
+        if (s === "" || s === "-") return 0n;
+        return BigInt(s);
+      } catch { return 0n; }
     };
     const format = (n) => {
-      let num = cleanMoney(n);
-      if (num === 0) return "$0";
-      let tier = Math.floor(Math.log10(num) / 3);
+      let num = toBigInt(n);
+      if (num === 0n) return "$0";
+      if (num < 0n) num = -num;
+      let digits = num.toString().length;
+      let tier = Math.floor((digits - 1) / 3);
       if (tier >= SUFFIXES.length) tier = SUFFIXES.length - 1;
-      if (tier < 0) tier = 0;
+      if (tier === 0) return `$${num.toString()}`;
       let suffix = SUFFIXES[tier];
-      let scaled = num / Math.pow(10, tier * 3);
-      if (scaled < 10) return `$${scaled.toFixed(2)}${suffix}`;
-      if (scaled < 100) return `$${scaled.toFixed(1)}${suffix}`;
-      return `$${Math.floor(scaled)}${suffix}`;
+      let divisor = 10n ** BigInt(tier * 3);
+      let whole = num / divisor;
+      let rem = num % divisor;
+      let dec2 = (rem * 100n / divisor).toString().padStart(2, "0");
+      let dec1 = dec2[0];
+      if (whole < 10n) return `$${whole}.${dec2}${suffix}`;
+      if (whole < 100n) return `$${whole}.${dec1}${suffix}`;
+      return `$${whole}${suffix}`;
     };
     const parseAmount = (input) => {
-      if (!input) return NaN;
-      let s = String(input).toLowerCase().trim().replace(/[,]/g, "");
-      let match = s.match(/^([\d.]+)\s*([a-z]+)?$/);
-      if (!match) return NaN;
-      let num = parseFloat(match[1]);
-      let suf = match[2] || "";
-      if (suf) {
-        if (SUFFIX_MAP[suf] === undefined) return NaN;
-        num = num * Math.pow(10, SUFFIX_MAP[suf]);
-      }
-      return Math.floor(num);
+      if (!input) return 0n;
+      return toBigInt(input);
     };
     // =======================================
 
     let amountInput = args[0];
-    if (!amountInput) return message.reply("💸 Usage: tax <amount>\nEx: tax 1b / tax 10000\nShows 10% tax fee");
-
+    if (!amountInput) return message.reply("💸 Usage: tax <amount>\nEx: tax 1b / tax 10000 / tax 999999999999999999 / tax 1tg\nShows 10% tax fee");
     let amount = parseAmount(amountInput);
-    if (isNaN(amount) || amount <= 0) return message.reply("❌ Invalid amount - ex: tax 1b / tax 500k");
+    if (amount <= 0n) return message.reply("❌ Invalid amount - ex: tax 1b / tax 500k / tax 1tg");
 
-    const taxRate = 0.10; // 10%
-    const tax = Math.floor(amount * taxRate);
+    // 10% tax - BigInt safe (no float)
+    const tax = amount * 10n / 100n;
     const afterTax = amount - tax;
-    const needToHave = Math.floor(amount / (1 - taxRate));
+    const needToHave = amount * 100n / 90n; // amount / 0.9
     const taxOnNeed = needToHave - amount;
 
     return message.reply(
