@@ -2,7 +2,7 @@ module.exports = {
   config: {
     name: "balance",
     aliases: ["bal", "money"],
-    version: "3.3",
+    version: "3.4",
     author: "FENG (fixed)",
     countDown: 2,
     role: 0,
@@ -13,25 +13,10 @@ module.exports = {
   onStart: async function ({ message, usersData, event }) {
     try {
       const { bankData } = global.db;
+      const SUFFIXES = ["", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "De", "Ud", "Dd", "Td", "Qad", "Qid", "Sxd", "Spd", "Od", "Nd", "Vg", "Uv", "Dv", "Tv", "Qav", "Qiv", "Sxv", "Spv", "Ocv", "Nov", "Tg", "Uag", "Dag", "Trg", "Qag", "Qig", "Sxg", "Spg", "Ocg", "Nog", "Deg", "Udg", "Ddg", "Tdg", "Qadg", "Qidg", "Sxdg", "Spdg", "Odg", "Ndg", "VgG", "Uvg", "Dvg", "Tvg", "Qavg", "Qivg", "Sxvg", "Spvg", "Ovg", "Nvg", "TgG", "Uatg", "Datg", "Trtg", "Qatg", "Qitg", "Sxtg", "Sptg", "Octg", "Notg", "Detg", "Udtg", "Ddtg", "Tdtg", "Qadtg", "Qidtg", "Sxdtg", "Spdtg", "Odtg", "Ndtg", "Vtg", "Uvtg", "Dvtg", "Tvtg", "Qavtg", "Qivtg", "Sxvtg", "Spvtg", "Ocvtg", "Novtg", "Ttg", "Uaog", "Daog", "Trog", "Qaog", "Qiog", "Sxog", "Spog", "Ocog", "Noog", "Deog", "Udog", "Ddog", "Tdog", "Qadog", "Qidog", "Sxdog", "Spdog", "Odog", "Ndog", "Cg"];
 
-      const SUFFIXES = [
-        "", "K", "M", "B", "T",
-        "Qa", "Qi", "Sx", "Sp", "Oc", "No", "De", "Ud", "Dd", "Td",
-        "Qad", "Qid", "Sxd", "Spd", "Od", "Nd",
-        "Vg", "Uv", "Dv", "Tv", "Qav", "Qiv", "Sxv", "Spv", "Ocv", "Nov",
-        "Tg",
-        "Uag", "Dag", "Trg", "Qag", "Qig", "Sxg", "Spg", "Ocg", "Nog", "Deg",
-        "Udg", "Ddg", "Tdg", "Qadg", "Qidg", "Sxdg", "Spdg", "Odg", "Ndg",
-        "VgG", "Uvg", "Dvg", "Tvg", "Qavg", "Qivg", "Sxvg", "Spvg", "Ovg", "Nvg",
-        "TgG",
-        "Uatg", "Datg", "Trtg", "Qatg", "Qitg", "Sxtg", "Sptg", "Octg", "Notg", "Detg",
-        "Udtg", "Ddtg", "Tdtg", "Qadtg", "Qidtg", "Sxdtg", "Spdtg", "Odtg", "Ndtg",
-        "Vtg", "Uvtg", "Dvtg", "Tvtg", "Qavtg", "Qivtg", "Sxvtg", "Spvtg", "Ocvtg", "Novtg",
-        "Ttg",
-        "Uaog", "Daog", "Trog", "Qaog", "Qiog", "Sxog", "Spog", "Ocog", "Noog", "Deog",
-        "Udog", "Ddog", "Tdog", "Qadog", "Qidog", "Sxdog", "Spdog", "Odog", "Ndog",
-        "Cg"
-      ];
+      // ===== INFINITY = 999Cg =====
+      const INFINITY = BigInt("999" + "0".repeat(300));
 
       // ===== WORKS WITH 999999999999999999 - NO LIMIT, NO RETURN 0 =====
       const toBigInt = (val) => {
@@ -39,6 +24,7 @@ module.exports = {
         try {
           let s = String(val).trim().replace(/,/g, "").replace(/_/g, "").replace(/\$/g, "").replace(/@/g, "");
           if (s === "" || s === "-") return 0n;
+          if (s === "Infinity" || s === "∞") return INFINITY;
           if (s.includes("e") || s.includes("E")) {
             let [mant, exp] = s.toLowerCase().split("e");
             let expNum = parseInt(exp);
@@ -53,7 +39,7 @@ module.exports = {
           if (match) {
             let numPart = match[1];
             let suffix = match[2] ? match[2].toLowerCase() : "";
-            if (!suffix) return BigInt(numPart.split(".")[0]); // plain 999999999999999999
+            if (!suffix) return BigInt(numPart.split(".")[0]);
             let idx = SUFFIXES.findIndex(x => x.toLowerCase() === suffix);
             if (idx > 0) {
               let [whole, dec = ""] = numPart.split(".");
@@ -69,9 +55,9 @@ module.exports = {
           return BigInt(s);
         } catch { return 0n; }
       };
-
       const format = (n) => {
         let num = toBigInt(n);
+        if (num >= INFINITY) return "∞"; // ← FIX: owner infinity shows as ∞
         if (num === 0n) return "$0";
         if (num < 0n) num = -num;
         let digits = num.toString().length;
@@ -101,6 +87,23 @@ module.exports = {
         } catch {}
         const total = walletSafe + bank;
 
+        // If owner infinity, show special
+        const isInfinity = walletSafe >= INFINITY || bank >= INFINITY;
+        if (isInfinity) {
+          if (mentionName) {
+            const cleanName = String(mentionName).replace(/^@/, "");
+            return `👤 ${cleanName} ♾️ OWNER\n💰 ∞ total\n↳ 💵 ∞ wallet • 🏦 ∞ bank`;
+          }
+          return (
+            `💳 Your Balance ♾️ OWNER\n` +
+            `──────────────\n` +
+            `💰 ∞ total\n\n` +
+            `💵 Wallet: ∞\n` +
+            `🏦 Bank: ∞\n\n` +
+            `♾️ Infinity Mode ON`
+          );
+        }
+
         let taxLabel = "";
         let taxNote = "✅ No tax - keep grinding!";
         if (total >= 1000000n) {
@@ -113,7 +116,6 @@ module.exports = {
           taxLabel = " 2% Tax";
           taxNote = "⚠️ Tax bracket: 2%";
         }
-
         if (mentionName) {
           const cleanName = String(mentionName).replace(/^@/, "");
           return `👤 ${cleanName}${taxLabel}\n💰 ${format(total)} total\n↳ 💵 ${format(walletSafe)} wallet • 🏦 ${format(bank)} bank`;
@@ -130,8 +132,6 @@ module.exports = {
 
       const mentions = event.mentions || {};
       const mentionIDs = Object.keys(mentions);
-
-      // 1. Mention
       if (mentionIDs.length > 0) {
         let msg = "";
         for (const uid of mentionIDs) {
@@ -139,15 +139,11 @@ module.exports = {
         }
         return message.reply(msg.trim());
       }
-
-      // 2. Reply - NEW: reply to someone to check their balance
       if (event.messageReply?.senderID) {
         const replyID = event.messageReply.senderID;
         const name = await usersData.getName(replyID).catch(() => replyID);
         return message.reply(await getUser(replyID, name));
       }
-
-      // 3. Self
       return message.reply(await getUser(event.senderID, null));
     } catch (err) {
       console.error("[BALANCE] Error:", err);
