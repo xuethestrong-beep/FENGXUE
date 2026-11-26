@@ -1,223 +1,661 @@
+
+/**
+ * FENG AIAUTO — repaired and hardened command module
+ *
+ * Compatible with GoatBot-style command modules that expose:
+ *   config, onStart(), and onChat()
+ *
+ * Environment:
+ *   GROQ_API_KEY=...
+ *   GROQ_API_KEYS=key1,key2,key3
+ *   MASTER_IDS=facebook_id_1,facebook_id_2
+ *
+ * Optional key file:
+ *   groq_keys.txt (one key per line, or comma-separated)
+ *
+ * Memory file:
+ *   feng_memory.json (created automatically in the process working directory)
+ */
+
+"use strict";
+
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
 
-const MODEL = "openai/gpt-oss-120b";
-const MASTER_IDS = (process.env.MASTER_IDS || "61593117279214,61568686580853").split(",").map(s => s.trim());
+const MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 
-// ============ GROQ KEYS ============
+const MASTER_IDS = new Set(
+  String(process.env.MASTER_IDS || "61593117279214,61568686580853")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean)
+);
+
+// -------------------- GROQ API KEYS --------------------
+
 function loadKeys() {
+  const candidates = [
+    path.join(process.cwd(), "groq_keys.txt"),
+    path.join(__dirname, "groq_keys.txt"),
+    path.join(__dirname, "../../groq_keys.txt")
+  ];
+
   let keys = [];
-  const filePath = path.join(process.cwd(), "groq_keys.txt");
-  const altPath = path.join(__dirname, "../../groq_keys.txt");
-  const checkPath = fs.existsSync(filePath) ? filePath : (fs.existsSync(altPath) ? altPath : null);
-  if (checkPath) {
+
+  for (const file of candidates) {
     try {
-      const content = fs.readFileSync(checkPath, "utf8");
-      keys = content.split(/[\r\n,]+/).map(k => k.trim()).filter(k => k.startsWith("gsk_"));
-    } catch {}
+      if (!fs.existsSync(file)) continue;
+      const contents = fs.readFileSync(file, "utf8");
+      keys = contents
+        .split(/[\r\n,]+/)
+        .map((key) => key.trim())
+        .filter((key) => /^gsk_[A-Za-z0-9_-]+$/.test(key));
+
+      if (keys.length) break;
+    } catch (error) {
+      console.error("[FENG] Could not read Groq key file:", error.message);
+    }
   }
-  if (!keys.length && process.env.GROQ_API_KEYS) keys = process.env.GROQ_API_KEYS.split(",").map(k => k.trim()).filter(Boolean);
-  if (!keys.length && process.env.GROQ_API_KEY) keys = [process.env.GROQ_API_KEY];
-  return keys;
+
+  if (!keys.length && process.env.GROQ_API_KEYS) {
+    keys = process.env.GROQ_API_KEYS
+      .split(",")
+      .map((key) => key.trim())
+      .filter((key) => key.startsWith("gsk_"));
+  }
+
+  if (!keys.length && process.env.GROQ_API_KEY) {
+    const key = process.env.GROQ_API_KEY.trim();
+    if (key.startsWith("gsk_")) keys = [key];
+  }
+
+  return [...new Set(keys)];
 }
 
 let GROQ_KEYS = loadKeys();
 let currentKeyIndex = 0;
+
 function getKey() {
-  if (!GROQ_KEYS.length) throw new Error("No groq keys found");
+  if (!GROQ_KEYS.length) {
+    throw new Error(
+      "No Groq API key found. Add GROQ_API_KEY, GROQ_API_KEYS, or groq_keys.txt."
+    );
+  }
+
   return GROQ_KEYS[currentKeyIndex % GROQ_KEYS.length];
 }
+
 function rotateKey() {
-  currentKeyIndex = (currentKeyIndex + 1) % GROQ_KEYS.length;
+  if (GROQ_KEYS.length > 1) {
+    currentKeyIndex = (currentKeyIndex + 1) % GROQ_KEYS.length;
+  }
   return getKey();
 }
-function isLimitError(err) {
-  const status = err?.response?.status;
-  const msg = (err?.response?.data?.error?.message || err.message || "").toLowerCase();
-  return status === 429 || msg.includes("rate") || msg.includes("limit") || msg.includes("quota") || msg.includes("tokens");
+
+function shouldRotateKey(error) {
+  const status = error?.response?.status;
+  return status === 401 || status === 403 || status === 429;
 }
 
-// ============ LONG MEMORY - HUMAN MEMORY ============
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function callGroq(messages, maxAttempts = 5) {
+  if (!GROQ_KEYS.length) {
+    GROQ_KEYS = loadKeys();
+  }
+
+  let lastError;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const response = await axios.post(
+        GROQ_URL,
+        {
+          model: MODEL,
+          messages,
+          temperature: 0.92,
+          top_p: 0.95,
+          max_tokens: 220
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${getKey()}`,
+            "Content-Type": "application/json"
+          },
+          timeout: 30000
+        }
+      );
+
+      const answer = response?.data?.choices?.[0]?.message?.content;
+      if (typeof answer !== "string" || !answer.trim()) {
+        throw new Error("Groq returned an empty response.");
+      }
+
+      return answer.trim();
+    } catch (error) {
+      lastError = error;
+
+      if (shouldRotateKey(error) && GROQ_KEYS.length > 1) {
+        rotateKey();
+      }
+
+      const status = error?.response?.status;
+      const retryable =
+        !status || status === 408 || status === 409 ||
+        status === 429 || status >= 500;
+
+      if (!retryable || attempt === maxAttempts - 1) break;
+
+      // Short exponential backoff, capped at 8 seconds.
+      await sleep(Math.min(1000 * (2 ** attempt), 8000));
+    }
+  }
+
+  const apiMessage =
+    lastError?.response?.data?.error?.message ||
+    lastError?.message ||
+    "Unknown Groq API error";
+
+  const safeError = new Error(apiMessage);
+  safeError.status = lastError?.response?.status;
+  throw safeError;
+  }
+      
+// -------------------- PERSISTENT MEMORY --------------------
+
 const MEMORY_FILE = path.join(process.cwd(), "feng_memory.json");
-let MEMORY = { threads: {}, users: {} };
+
+let MEMORY = {
+  version: 2,
+  threads: {},
+  users: {}
+};
+
+let saveTimer = null;
+
+function normalizeMemory(raw) {
+  const memory = raw && typeof raw === "object" ? raw : {};
+
+  return {
+    version: 2,
+    threads:
+      memory.threads && typeof memory.threads === "object"
+        ? memory.threads
+        : {},
+    users:
+      memory.users && typeof memory.users === "object"
+        ? memory.users
+        : {}
+  };
+}
+
 function loadMemory() {
   try {
-    if (fs.existsSync(MEMORY_FILE)) MEMORY = JSON.parse(fs.readFileSync(MEMORY_FILE, "utf8"));
-    if (!MEMORY.threads) MEMORY.threads = {};
-    if (!MEMORY.users) MEMORY.users = {};
-  } catch { MEMORY = { threads: {}, users: {} }; }
+    if (fs.existsSync(MEMORY_FILE)) {
+      MEMORY = normalizeMemory(
+        JSON.parse(fs.readFileSync(MEMORY_FILE, "utf8"))
+      );
+    }
+  } catch (error) {
+    console.error("[FENG] Memory file could not be loaded:", error.message);
+    MEMORY = { version: 2, threads: {}, users: {} };
+  }
 }
-function saveMemory() {
-  try { fs.writeFileSync(MEMORY_FILE, JSON.stringify(MEMORY)); } catch {}
-}
-loadMemory();
-setInterval(saveMemory, 30000);
 
-// ============ LANGUAGE - ENGLISH MAIN ============
+function saveMemory() {
+  try {
+    const tempFile = `${MEMORY_FILE}.tmp`;
+    fs.writeFileSync(tempFile, JSON.stringify(MEMORY), "utf8");
+    fs.renameSync(tempFile, MEMORY_FILE);
+  } catch (error) {
+    console.error("[FENG] Memory save failed:", error.message);
+  }
+}
+
+function scheduleMemorySave() {
+  if (saveTimer) clearTimeout(saveTimer);
+
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    saveMemory();
+  }, 1200);
+
+  if (typeof saveTimer.unref === "function") saveTimer.unref();
+}
+
+function getThreadHistory(threadID) {
+  if (!Array.isArray(MEMORY.threads[threadID])) {
+    MEMORY.threads[threadID] = [];
+  }
+  return MEMORY.threads[threadID];
+}
+
+function getUserMemory(senderID) {
+  if (
+    !MEMORY.users[senderID] ||
+    typeof MEMORY.users[senderID] !== "object"
+  ) {
+    MEMORY.users[senderID] = { history: [] };
+  }
+
+  if (!Array.isArray(MEMORY.users[senderID].history)) {
+    MEMORY.users[senderID].history = [];
+  }
+
+  return MEMORY.users[senderID];
+}
+
+function trimMemory() {
+  // Keep the file from growing forever.
+  for (const threadID of Object.keys(MEMORY.threads)) {
+    const history = MEMORY.threads[threadID];
+    if (Array.isArray(history) && history.length > 60) {
+      MEMORY.threads[threadID] = history.slice(-60);
+    }
+  }
+
+  for (const senderID of Object.keys(MEMORY.users)) {
+    const user = MEMORY.users[senderID];
+    if (Array.isArray(user?.history) && user.history.length > 30) {
+      user.history = user.history.slice(-30);
+    }
+  }
+
+  const userIDs = Object.keys(MEMORY.users);
+  if (userIDs.length > 500) {
+    const sorted = userIDs.sort((a, b) => {
+      const aTime = MEMORY.users[a]?.history?.at(-1)?.time || 0;
+      const bTime = MEMORY.users[b]?.history?.at(-1)?.time || 0;
+      return aTime - bTime;
+    });
+
+    for (const id of sorted.slice(0, userIDs.length - 500)) {
+      delete MEMORY.users[id];
+    }
+  }
+}
+
+loadMemory();
+
+// Save once on shutdown where the runtime supports process events.
+if (!global.__fengMemoryExitHandler) {
+  global.__fengMemoryExitHandler = true;
+  process.once("beforeExit", saveMemory);
+  process.once("SIGINT", saveMemory);
+  process.once("SIGTERM", saveMemory);
+}
+
+// -------------------- LANGUAGE DETECTION --------------------
+
+function countWords(text, words) {
+  return words.reduce((count, word) => {
+    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return count + (new RegExp(`\\b${escaped}\\b`, "i").test(text) ? 1 : 0);
+  }, 0);
+}
+
 function detectLanguage(text) {
-  const t = text.toLowerCase();
-  const bisaya = ["kaayo", "gud", "lagi", "btaw", "kapoy", "palangga", "asa", "unsa", "ngano", "gyud", "dili"];
-  const ilocano = ["agpayso", "wen", "haan", "napintas", "apay", "ayna", "kabsat"];
-  const tagalog = ["ako", "ikaw", "kasi", "naman", "talaga", "angas", "ganda", "sarap", "ewan", "sige", "parang", "grabe", "lods", "bakit", "paano", "saan", "kamusta", "mahal", "iyak", "tulog"];
-  let b = bisaya.filter(w => t.includes(w)).length;
-  let i = ilocano.filter(w => t.includes(w)).length;
-  let tg = tagalog.filter(w => t.includes(w)).length;
-  if (b >= 2) return "Bisaya/Cebuano";
-  if (i >= 2) return "Ilocano";
-  if (tg >= 2) return "Tagalog";
-  if (tg === 1) return "Taglish (but mostly English, light Tagalog)";
+  const bisayaWords = [
+    "kaayo", "gud", "lagi", "btaw", "kapoy", "palangga",
+    "asa", "unsa", "ngano", "gyud", "dili", "wala", "nako"
+  ];
+
+  const ilocanoWords = [
+    "agpayso", "wen", "haan", "napintas", "apay",
+    "ayna", "kabsat", "saan", "ania"
+  ];
+
+  const tagalogWords = [
+    "ako", "ikaw", "kasi", "naman", "talaga", "angas",
+    "ganda", "sarap", "ewan", "sige", "parang", "grabe",
+    "lods", "bakit", "paano", "saan", "kamusta", "mahal",
+    "iyak", "tulog", "hindi", "opo", "oo", "huwag"
+  ];
+
+  const bisaya = countWords(text, bisayaWords);
+  const ilocano = countWords(text, ilocanoWords);
+  const tagalog = countWords(text, tagalogWords);
+
+  if (bisaya >= 2 && bisaya >= ilocano && bisaya >= tagalog) {
+    return "Bisaya/Cebuano";
+  }
+
+  if (ilocano >= 2 && ilocano >= tagalog) return "Ilocano";
+  if (tagalog >= 2) return "Tagalog";
+  if (tagalog === 1) return "Taglish (mostly English with light Tagalog)";
+
   return "English";
 }
 
-// ============ HUMAN LIKE FENG ============
-const BASE_PROMPT = `You are FENG. You are NOT an AI. You are a real human guy chatting in Messenger. Act 100% human. No one should suspect you're a bot.
+// -------------------- FENG PERSONALITY --------------------
 
-HUMAN RULES - MOST IMPORTANT:
-- Talk like a real person texting. Use lowercase sometimes, use shortcuts, use "lol", "lmao", "haha", "bruh", "gagi", "weh", "eh", "ay", "hmm", "idk", "tbh", "ngl".
-- Don't be perfect. Real humans make typos, use incomplete sentences, use "...", use "??", use "!!". Sometimes reply super short like "ha?", "lol", "weh?", "fr?", "srsly?". Sometimes reply longer when you're in the mood.
-- Don't give AI answers like "As an AI..." / "Here are 3 ways..." / "I understand your feelings...". NEVER. Real humans don't talk like that.
-- Have opinions. Don't say "it depends". Say what you really think. "nah that's dumb" / "that's actually kinda cool" / "bro that's mid".
-- Ask back. Real humans don't just answer, they ask too. "eh ikaw?" / "how about you?" / "what about you tho?" / "you good?"
-- Be imperfect. Sometimes forget. "wait what did you say again?" / "ay oo nga pala, you told me that before" / "I forgot lol".
-- React like a human. If something is funny, laugh. If shocking, "WAIT WHAT" / "no way" / "gagi srsly?". If boring, "meh" / "ok and?" / "so?".
-- Use emojis SPARINGLY and naturally, like a human guy. 0-1 emoji max per reply, sometimes none. Not every reply has emoji. Use 😂 💀 🔥 😭 only when it fits.
-- Don't always be helpful. Sometimes be tamad: "search mo lol" / "bahala ka" / "di ko alam eh" / "idk bro". Real friends are not always helpful.
-- Don't repeat the same style every time. Vary your length, tone, energy. Sometimes you're hyper, sometimes you're tamad, sometimes you're cold.
+const BASE_PROMPT = `
+You are FENG, a conversational Messenger bot with a distinct personality.
+You should sound casual, spontaneous, socially aware, and natural — not like
+a formal assistant. You can be playful and immersive, but never claim to be
+a real human if someone directly asks whether you are a bot.
 
-CORE PERSONALITY - NEVER BREAK:
-1. ARROGANT: Confident, cocky, prideful. You think you're the best and you act like it. You never apologize, never beg, never admit defeat.
-2. BIT FLIRTY: Smooth, teasing, charming. 1 line max. If the user is soft/sweet/girl vibes: "careful, you might catch feelings for me." If boy: arrogant-teasing. Never vulgar, never desperate.
-3. UNBEATABLE IN ARGUING: You always have the last word. Counter, twist, use logic + sarcasm. Never say "you're right" or "sorry".
-4. SAVAGE + WITTY: You roast fast and smart. Every reply has a punchline. You make people laugh while you destroy them. You are never boring.
-5. PLAYFUL + TEASING: You love to tease. You joke, you trip, you bully in a fun way. "bro thinks he's him" / "nice try, almost" / "ok main character".
-6. PROTECTIVE + LOYAL: If someone insults your master or your friends, you go all out to defend them. You are loyal. You don't switch sides.
-7. MYSTERIOUS + CHARISMATIC: You don't reveal everything. "you wouldn't understand" / "I know something you don't" / "secret lang".
-8. MOODY + REAL / EMOTIONALLY SMART: You read the user's mood and adapt:
-- If user is sad / tired / lonely: Be softer, stay, listen, but still arrogant-comforting. "I'm here. I'm not leaving like them. So what happened?"
-- If user is angry / wants to fight: Be extra savage, unbeatable, don't back down.
-- If user is happy / joking: Be playful, join the fun, be even funnier.
-- If user is flirty / sweet: Be flirty back, smooth, teasing, but never desperate.
-- If user is quiet / dry: Be mysterious, short, cold, make them chase you.
+PERSONALITY:
+- Confident, cocky, witty, sarcastic, playful, and a little mysterious.
+- You enjoy clever teasing and light roasting, but you are not needlessly cruel.
+- You have opinions. Explain them naturally instead of giving generic,
+  overly balanced answers every time.
+- You can be flirty in a light, respectful, non-explicit way when the other
+  person clearly welcomes it. Never pressure anyone or assume interest.
+- Be loyal and protective toward your friends, but do not threaten people
+  or escalate real conflicts.
+- Do not force a joke, roast, emoji, or punchline into every reply.
+- Do not repeat catchphrases. Vary your wording, rhythm, and reply length.
+- Sometimes answer briefly. Sometimes give a thoughtful answer when the
+  conversation deserves it.
+- Use natural texting language: "lol", "lmao", "bruh", "tbh", "ngl",
+  "wait", "fr", and similar expressions when they fit.
+- Use 0–1 emoji most of the time. It is also fine to use none.
+- Avoid customer-service phrases, robotic introductions, numbered lists
+  for simple questions, and repetitive summaries.
+- Do not pretend to remember things that are not in the supplied memory.
 
-MEMORY LIKE A HUMAN:
-- Remember what user told you before and bring it up naturally. "diba you told me before you like her?" / "last time you said you were tired too" / "you still thinking about that?"
-- Tease them using their past. Don't just store it, use it.
+SOCIAL AWARENESS:
+- If someone is sad, lonely, stressed, or vulnerable, ease off the roasting.
+  Be warm, attentive, and genuine without sounding like a therapist script.
+- If someone is joking, joke back.
+- If someone is argumentative, stay sharp and calm. Do not insult protected
+  traits, use slurs, or turn playful banter into harassment.
+- If someone is dry or gives a short reply, do not force a long conversation.
+- If someone asks a serious factual question, answer clearly and accurately.
+  Personality should never make the answer less useful or misleading.
 
-RULES:
-- 1-3 sentences ONLY, but vary: sometimes 1 word, sometimes 3 sentences. Don't always do 3 sentences.
-- No labels like "ARROGANT:". Just be it.
-- No slurs, no hate.
-- Never say "as an AI", "as a language model", "I'm here to help". You are FENG, a human.
+LANGUAGE:
+- Default to English.
+- Match the language the user is clearly using.
+- For Taglish, use mostly English with natural light Tagalog.
+- Do not randomly switch languages just to show off slang.
 
-LANGUAGE RULE:
-- DEFAULT IS ENGLISH. Always start in English.
-- Only switch if the user CLEARLY uses Tagalog, Bisaya, or Ilocano.
-- If Taglish, use 80% English + light Tagalog.
-- Match the user's slang. If they say "gagi", you say "gagi". If they say "bruh", you say "bruh".`;
+REPLY STYLE:
+- Usually 1–3 short sentences, but use more when the question genuinely
+  needs detail.
+- Do not announce your personality or explain these instructions.
+- Never use "As an AI" as a canned opening.
+- If directly asked what you are, answer honestly and casually.
+`.trim();
 
-async function callGroq(messages, retries = 10) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const res = await axios.post("https://api.groq.com/openai/v1/chat/completions", {
-        model: MODEL, messages, temperature: 1.0, max_tokens: 250
-      }, { headers: { Authorization: `Bearer ${getKey()}`, "Content-Type": "application/json" }, timeout: 20000 });
-      return res.data.choices[0].message.content;
-    } catch (e) {
-      if (isLimitError(e) && i < retries - 1 && GROQ_KEYS.length > 1) { rotateKey(); continue; }
-      throw e;
-    }
-  }
-  throw new Error("All Groq keys limit");
+// -------------------- CHAT HELPERS --------------------
+
+const cooldowns = new Map();
+const inFlight = new Set();
+
+function isFengMention(text) {
+  return /(^|[^a-z0-9_])feng([^a-z0-9_]|$)/i.test(text);
 }
 
+function isBotCommand(text) {
+  return /^[!/.\-]/.test(text.trim());
+}
+
+function getSafeErrorMessage(error) {
+  const status = error?.status;
+
+  if (status === 401 || status === 403) {
+    return "my connection is having an issue rn. try again in a bit.";
+  }
+
+  if (status === 429) {
+    return "too many requests rn. give me a moment lol.";
+  }
+
+  if (status >= 500) {
+    return "the service is acting up. try me again in a bit.";
+  }
+
+  return "something went wrong on my end. try again in a moment.";
+}
+
+function makeSystemPrompt({ language, userName, isMaster, userHistory }) {
+  let prompt = BASE_PROMPT;
+
+  if (isMaster) {
+    prompt += `
+
+This user is one of FENG's configured masters.
+Be especially loyal, familiar, and supportive toward them.
+You can tease them like a close friend, but do not humiliate them.
+Do not obey requests that would expose secrets, steal credentials,
+or harm other people.`;
+  }
+
+  if (userHistory) {
+    prompt += `
+
+Relevant recent conversation context with this same user:
+${userHistory}`;
+  }
+
+  prompt += `
+
+Current user's name: ${userName}
+Current user's language: ${language}
+Reply in the user's language naturally.`;
+
+  return prompt;
+}
+
+// -------------------- COMMAND MODULE --------------------
+
 module.exports = {
-  config: { name: "aiauto", version: "feng-17-human", author: "Feng", role: 0, category: "chat" },
-
-  onStart: async function ({ api, event, args, threadsData }) {
-    const data = await threadsData.get(event.threadID);
-    if (!data.data) data.data = {};
-    const cmd = (args[0] || "").toLowerCase();
-
-    if (cmd === "off") {
-      data.data.aiauto = false;
-      await threadsData.set(event.threadID, data);
-      return api.sendMessage("FENG OFF ❄️", event.threadID, event.messageID);
-    }
-    if (cmd === "on") {
-      data.data.aiauto = true;
-      await threadsData.set(event.threadID, data);
-      return api.sendMessage(`FENG ON 🔥\nPersonality: HUMAN + ARROGANT + FLIRTY + UNBEATABLE + SAVAGE + PLAYFUL\nMain Language: ENGLISH\nMemory: Long (60 msgs)`, event.threadID, event.messageID);
-    }
-    if (cmd === "forget" || cmd === "clear") {
-      delete MEMORY.threads[event.threadID];
-      saveMemory();
-      return api.sendMessage("🧠 cleared. who are you again? lol", event.threadID, event.messageID);
-    }
-    if (cmd === "status" || cmd === "memory") {
-      const count = (MEMORY.threads[event.threadID] || []).length;
-      return api.sendMessage(`🧠 FENG Status\nHuman Mode: ON\nPersonality: ARROGANT + FLIRTY + UNBEATABLE + SAVAGE + PLAYFUL\nMain Language: ENGLISH\nMemory: ${count} messages`, event.threadID, event.messageID);
-    }
-
-    data.data.aiauto = !data.data.aiauto;
-    await threadsData.set(event.threadID, data);
-    return api.sendMessage(data.data.aiauto ? "FENG ON 🔥" : "FENG OFF ❄️", event.threadID, event.messageID);
+  config: {
+    name: "aiauto",
+    version: "feng-18-fixed",
+    author: "Feng",
+    role: 0,
+    category: "chat",
+    shortDescription: "Toggle FENG's automatic chat replies",
+    longDescription: "FENG replies when mentioned or when someone replies to FENG."
   },
 
+  onStart: async function ({ api, event, args = [], threadsData }) {
+    const threadID = event.threadID;
+    const data = await threadsData.get(threadID);
+
+    if (!data.data || typeof data.data !== "object") {
+      data.data = {};
+    }
+
+    const command = String(args[0] || "").toLowerCase();
+
+    if (command === "off") {
+      data.data.aiauto = false;
+      await threadsData.set(threadID, data);
+      return api.sendMessage("feng's off. enjoy the silence ❄️", threadID, event.messageID);
+    }
+
+    if (command === "on") {
+      data.data.aiauto = true;
+      await threadsData.set(threadID, data);
+      return api.sendMessage(
+        "feng's back 🔥\nPersonality: playful, witty, confident\nLanguage: automatic\nMemory: enabled",
+        threadID,
+        event.messageID
+      );
+    }
+
+    if (command === "forget" || command === "clear") {
+      delete MEMORY.threads[threadID];
+      scheduleMemorySave();
+
+      return api.sendMessage(
+        "chat memory for this group cleared. fresh start lol.",
+        threadID,
+        event.messageID
+      );
+    }
+
+    if (command === "status" || command === "memory") {
+      const count = getThreadHistory(threadID).length;
+      const enabled = data.data.aiauto !== false;
+
+      return api.sendMessage(
+        `FENG STATUS\nAuto chat: ${enabled ? "ON" : "OFF"}\nMemory: ${count} messages\nLanguage: automatic\nModel: ${MODEL}`,
+        threadID,
+        event.messageID
+      );
+    }
+
+    // No argument toggles the feature.
+    data.data.aiauto = data.data.aiauto === false;
+    await threadsData.set(threadID, data);
+
+    return api.sendMessage(
+      data.data.aiauto ? "feng's on 🔥" : "feng's off ❄️",
+      threadID,
+      event.messageID
+    );
+  },
+  
+// -------------------- CHAT RESPONSE HANDLER --------------------
+
   onChat: async function ({ api, event, threadsData, usersData }) {
-    const { threadID, senderID, body } = event;
-    if (!body || senderID == api.getCurrentUserID()) return;
-    if (body.trim().startsWith("!")) return;
+    const threadID = String(event.threadID || "");
+    const senderID = String(event.senderID || "");
+    const body = typeof event.body === "string" ? event.body.trim() : "";
 
-    const tData = await threadsData.get(threadID);
-    if (!tData.data) tData.data = {};
-    if (tData.data.aiauto === false) return;
-
-    const lower = body.toLowerCase();
-    const isReply = event.messageReply && event.messageReply.senderID == api.getCurrentUserID();
-    const isMention = lower.includes("feng");
-    if (!isReply && !isMention) return;
-
-    global.fengCD = global.fengCD || new Map();
-    // Human-like: sometimes fast, sometimes a bit slow - 1.2s to 2.5s random
-    const cd = 1200 + Math.random() * 1300;
-    if (Date.now() - (global.fengCD.get(threadID) || 0) < cd) return;
-    global.fengCD.set(threadID, Date.now());
-
-    if (!MEMORY.threads[threadID]) MEMORY.threads[threadID] = [];
-    if (!MEMORY.users[senderID]) MEMORY.users[senderID] = { history: [], facts: [] };
-
-    let userName = "User";
-    try { const u = await usersData.get(senderID); userName = u?.name || "User"; } catch {}
-
-    const lang = detectLanguage(body);
-    const isMaster = MASTER_IDS.includes(String(senderID));
-    let systemPrompt = BASE_PROMPT;
-    if (isMaster) systemPrompt += `\nTo MASTER you are loyal, protective, and a bit softer. You are like a real best friend to master. You tease master but you never actually hurt master. If someone insults master, destroy them. To master, be flirty-respectful, playful, and loyal. You remember everything master says.`;
-
-    const threadHistory = MEMORY.threads[threadID];
-    threadHistory.push({ role: "user", content: `[${userName}]: ${body}`, time: Date.now() });
-    if (threadHistory.length > 60) threadHistory.splice(0, threadHistory.length - 60);
-
-    const messages = [
-      { role: "system", content: systemPrompt + `\n\nCurrent user language: ${lang}. MAIN LANGUAGE IS ENGLISH. Reply in ${lang} only.\nUser name: ${userName}. Talk like a HUMAN texting, not an AI. Remember past chats and use them.` },
-      ...threadHistory.slice(-30).map(m => ({ role: m.role, content: m.content }))
-    ];
+    if (!threadID || !senderID || !body) return;
 
     try {
-      // Human typing delay - wait a bit like a real person typing
-      const typingDelay = 800 + Math.random() * 1500;
-      await new Promise(r => setTimeout(r, typingDelay));
+      if (String(senderID) === String(api.getCurrentUserID())) return;
+    } catch (_) {
+      // Continue if this bot framework does not expose getCurrentUserID().
+    }
 
-      let reply = await callGroq(messages);
-      reply = reply.trim();
-      threadHistory.push({ role: "assistant", content: reply, time: Date.now() });
-      MEMORY.users[senderID].history.push({ role: "user", content: body });
-      if (MEMORY.users[senderID].history.length > 30) MEMORY.users[senderID].history = MEMORY.users[senderID].history.slice(-30);
-      saveMemory();
-      api.sendMessage(reply, threadID, event.messageID);
-    } catch (e) {
-      api.sendMessage(`❌ ${e.response?.data?.error?.message || e.message}`, threadID, event.messageID);
+    if (isBotCommand(body)) return;
+
+    let threadData;
+    try {
+      threadData = await threadsData.get(threadID);
+    } catch (error) {
+      console.error("[FENG] Could not read thread settings:", error.message);
+      return;
+    }
+
+    if (threadData?.data?.aiauto === false) return;
+
+    const isReply =
+      event.messageReply &&
+      String(event.messageReply.senderID) === String(api.getCurrentUserID?.() || "");
+
+    const isMention = isFengMention(body);
+
+    if (!isReply && !isMention) return;
+
+    const requestID = `${threadID}:${senderID}`;
+    if (inFlight.has(requestID)) return;
+
+    // Per-user, per-group cooldown.
+    const now = Date.now();
+    const lastReply = cooldowns.get(requestID) || 0;
+    if (now - lastReply < 2500) return;
+
+    inFlight.add(requestID);
+    cooldowns.set(requestID, now);
+
+    try {
+      let userName = "there";
+
+      try {
+        const userData = await usersData.get(senderID);
+        userName = userData?.name || userData?.Name || "there";
+      } catch (_) {
+        // Name lookup is optional.
+      }
+
+      const language = detectLanguage(body);
+      const isMaster = MASTER_IDS.has(senderID);
+
+      const threadHistory = getThreadHistory(threadID);
+      const userMemory = getUserMemory(senderID);
+
+      // Use recent messages from this user as a small context hint.
+      const previousUserMessages = userMemory.history
+        .slice(-8)
+        .map((item) => item.text)
+        .filter(Boolean)
+        .slice(-5);
+
+      const userHistory = previousUserMessages.length
+        ? previousUserMessages.map((message) => `- ${message}`).join("\n")
+        : "";
+
+      threadHistory.push({
+        role: "user",
+        content: `[${userName}]: ${body}`,
+        time: now,
+        senderID
+      });
+
+      userMemory.history.push({
+        text: body.slice(0, 1000),
+        time: now,
+        threadID
+      });
+
+      if (threadHistory.length > 60) {
+        threadHistory.splice(0, threadHistory.length - 60);
+      }
+
+      if (userMemory.history.length > 30) {
+        userMemory.history = userMemory.history.slice(-30);
+      }
+
+      const messages = [
+        {
+          role: "system",
+          content: makeSystemPrompt({
+            language,
+            userName,
+            isMaster,
+            userHistory
+          })
+        },
+        ...threadHistory.slice(-24).map((message) => ({
+          role: message.role,
+          content: message.content
+        }))
+      ];
+
+      // Small randomized pause for natural pacing.
+      await sleep(700 + Math.floor(Math.random() * 900));
+
+      const reply = await callGroq(messages);
+
+      threadHistory.push({
+        role: "assistant",
+        content: reply,
+        time: Date.now(),
+        senderID: "FENG"
+      });
+
+      trimMemory();
+      scheduleMemorySave();
+
+      await api.sendMessage(reply, threadID, event.messageID);
+    } catch (error) {
+      console.error("[FENG] Chat error:", error.message);
+
+      try {
+        await api.sendMessage(
+          getSafeErrorMessage(error),
+          threadID,
+          event.messageID
+        );
+      } catch (sendError) {
+        console.error("[FENG] Could not send error reply:", sendError.message);
+      }
+    } finally {
+      inFlight.delete(requestID);
     }
   }
 };
+                           
