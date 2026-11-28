@@ -1,209 +1,308 @@
+
 module.exports = {
   config: {
     name: "casino",
-    aliases: ["csn", "gamble"],
-    version: "1.3",
-    author: "FENG (fixed)",
+    aliases: ["slots", "slot"],
+    version: "2.0.0",
+    author: "FENGSAMA",
     countDown: 5,
     role: 0,
-    description: "Full casino - slots, blackjack, roulette, dice, coinflip",
+    description: "Play casino games and win coins",
     category: "economy",
-    guide: { en: "{pn} slots <bet|all>\n{pn} bj <bet|all>\n{pn} roulette <bet|all> <red/black/number>\n{pn} dice <bet|all> <1-6>\n{pn} coinflip <bet|all> <heads/tails>" }
+    guide: {
+      en:
+        "{pn} slots <bet>\n" +
+        "{pn} bj <bet>\n" +
+        "{pn} roulette <red/black/odd/even/0-36> <bet>\n" +
+        "{pn} dice <bet>\n" +
+        "{pn} coinflip <heads/tails> <bet>"
+    }
   },
-  onStart: async function ({ args, message, event, usersData }) {
+
+  onStart: async function ({ message, event, args, usersData }) {
     try {
-      const uid = event.senderID;
+      const userID = event.senderID;
+      const userData = await usersData.get(userID);
 
-      const SUFFIXES = [
-        "", "K", "M", "B", "T",
-        "Qa", "Qi", "Sx", "Sp", "Oc", "No", "De", "Ud", "Dd", "Td",
-        "Qad", "Qid", "Sxd", "Spd", "Od", "Nd",
-        "Vg", "Uv", "Dv", "Tv", "Qav", "Qiv", "Sxv", "Spv", "Ocv", "Nov",
-        "Tg",
-        "Uag", "Dag", "Trg", "Qag", "Qig", "Sxg", "Spg", "Ocg", "Nog", "Deg",
-        "Udg", "Ddg", "Tdg", "Qadg", "Qidg", "Sxdg", "Spdg", "Odg", "Ndg",
-        "VgG", "Uvg", "Dvg", "Tvg", "Qavg", "Qivg", "Sxvg", "Spvg", "Ovg", "Nvg",
-        "TgG",
-        "Uatg", "Datg", "Trtg", "Qatg", "Qitg", "Sxtg", "Sptg", "Octg", "Notg", "Detg",
-        "Udtg", "Ddtg", "Tdtg", "Qadtg", "Qidtg", "Sxdtg", "Spdtg", "Odtg", "Ndtg",
-        "Vtg", "Uvtg", "Dvtg", "Tvtg", "Qavtg", "Qivtg", "Sxvtg", "Spvtg", "Ocvtg", "Novtg",
-        "Ttg",
-        "Uaog", "Daog", "Trog", "Qaog", "Qiog", "Sxog", "Spog", "Ocog", "Noog", "Deog",
-        "Udog", "Ddog", "Tdog", "Qadog", "Qidog", "Sxdog", "Spdog", "Odog", "Ndog",
-        "Cg"
-      ];
-      const toBigInt = (val) => {
-        if (val == null) return 0n;
-        try {
-          let s = String(val).trim().replace(/,/g, "").replace(/_/g, "").replace(/\$/g, "").replace(/@/g, "");
-          if (s === "" || s === "-") return 0n;
-          if (s.includes("e") || s.includes("E")) {
-            let [mant, exp] = s.toLowerCase().split("e");
-            let expNum = parseInt(exp);
-            let mantClean = mant.replace(".", "");
-            let dotPos = mant.includes(".") ? mant.split(".")[1].length : 0;
-            let big = BigInt(mantClean);
-            let pow = BigInt(expNum - dotPos);
-            if (pow < 0n) return big / (10n ** -pow);
-            return big * (10n ** pow);
-          }
-          let match = s.match(/^(\d+(?:\.\d+)?)([a-zA-Z]+)?$/);
-          if (match) {
-            let numPart = match[1];
-            let suffix = match[2] ? match[2].toLowerCase() : "";
-            if (!suffix) return BigInt(numPart.split(".")[0]);
-            let idx = SUFFIXES.findIndex(x => x.toLowerCase() === suffix);
-            if (idx > 0) {
-              let [whole, dec = ""] = numPart.split(".");
-              let base = BigInt(whole + dec);
-              let pow = BigInt(idx * 3 - dec.length);
-              if (pow < 0n) return base / (10n ** -pow);
-              return base * (10n ** pow);
-            }
-            return 0n;
-          }
-          s = s.replace(/[^0-9-]/g, "");
-          if (s === "" || s === "-") return 0n;
-          return BigInt(s);
-        } catch { return 0n; }
-      };
-      const format = (n) => {
-        let num = toBigInt(n);
-        if (num === 0n) return "$0";
-        if (num < 0n) num = -num;
-        let digits = num.toString().length;
-        let tier = Math.floor((digits - 1) / 3);
-        if (tier >= SUFFIXES.length) tier = SUFFIXES.length - 1;
-        if (tier === 0) return `$${num.toString()}`;
-        let suffix = SUFFIXES[tier];
-        let divisor = 10n ** BigInt(tier * 3);
-        let whole = num / divisor;
-        let rem = num % divisor;
-        let dec2 = (rem * 100n / divisor).toString().padStart(2, "0");
-        let dec1 = dec2[0];
-        if (whole < 10n) return `$${whole}.${dec2}${suffix}`;
-        if (whole < 100n) return `$${whole}.${dec1}${suffix}`;
-        return `$${whole}${suffix}`;
-      };
+      if (!userData) {
+        return message.reply("❌ Account data not found.");
+      }
 
-      const userData = (await usersData.get(uid)) || {};
-      let money = toBigInt(userData.money);
-      if (money < 0n) money = 0n;
-      const save = async (newMoney) => { await usersData.set(uid, { money: newMoney.toString() }); };
+      const wallet = BigInt(String(userData.money ?? 0));
+      const format = n => n.toLocaleString("en-US");
 
-      const game = (args[0] || "").toLowerCase();
-      if (!game) {
+      const help = () => message.reply(
+        `🎰 FENGSAMA CASINO\n\n` +
+        `🎰 SLOTS\ncasino slots 100\n\n` +
+        `🃏 BLACKJACK\ncasino bj 100\n\n` +
+        `🎡 ROULETTE\ncasino roulette red 100\n` +
+        `casino roulette black 100\n` +
+        `casino roulette odd 100\n` +
+        `casino roulette even 100\n` +
+        `casino roulette 17 100\n\n` +
+        `🎲 DICE\ncasino dice 100\n\n` +
+        `🪙 COINFLIP\ncasino coinflip heads 100\n` +
+        `casino coinflip tails 100\n\n` +
+        `💵 Wallet: $${format(wallet)}`
+      );
+
+      if (!args[0]) return help();
+
+      const game = args[0].toLowerCase();
+
+      let betText;
+      let choice;
+
+      if (["slots", "slot", "bj", "blackjack", "dice"].includes(game)) {
+        betText = args[1];
+      } else {
+        choice = String(args[1] || "").toLowerCase();
+        betText = args[2];
+      }
+
+      if (!betText || !/^\d+$/.test(betText)) {
+        return message.reply("❌ Enter a valid bet amount.\nExample: casino slots 100");
+      }
+
+      const bet = BigInt(betText);
+
+      if (bet <= 0n) {
+        return message.reply("❌ Your bet must be greater than zero.");
+      }
+
+      if (bet > wallet) {
         return message.reply(
-          `🎰 CASINO\n──────────────\n` +
-          `💰 Balance: ${format(money)}\n\n` +
-          `Games:\n` +
-          `• casino slots <bet> - 3 matching symbols\n` +
-          `• casino bj <bet> - blackjack vs dealer\n` +
-          `• casino roulette <bet> <red/black/0-36>\n` +
-          `• casino dice <bet> <1-6> - guess dice\n` +
-          `• casino coinflip <bet> <heads/tails>\n\n` +
-          `Ex: casino slots 1000\nEx: casino slots 1tg\nEx: casino slots 999999999999999999`
+          `❌ Insufficient wallet balance.\n💵 Wallet: $${format(wallet)}`
         );
       }
 
-      const betRaw = (args[1] || "").toLowerCase();
-      const MAX_BET = 10n ** 93n; // 1Tg - so big bets work, "all" bypasses if you want
-      const MIN_BET = 100n;
-      let bet = 0n;
-      let isAll = false;
-      if (betRaw === "all") { bet = money; isAll = true; }
-      else bet = toBigInt(betRaw);
-      if (bet <= 0n) return message.reply(`❌ Enter bet: casino ${game} <amount|all>\nEx: casino slots 1tg`);
-      if (money < bet) return message.reply(`❌ You only have ${format(money)}`);
-      if (bet < MIN_BET) return message.reply(`❌ Min bet ${format(MIN_BET)}`);
-      if (!isAll && bet > MAX_BET) return message.reply(`❌ Max bet ${format(MAX_BET)} (use "all" to bet all)`);
+      let payout = 0n;
+      let title = "";
+      let details = "";
 
-      if (game === "slots" || game === "slot") {
-        const symbols = ["🍒", "🍋", "🍊", "💎", "7️⃣", "🔔", "🍀"];
-        const r1 = symbols[Math.floor(Math.random() * symbols.length)];
-        const r2 = symbols[Math.floor(Math.random() * symbols.length)];
-        const r3 = symbols[Math.floor(Math.random() * symbols.length)];
-        let win = 0n;
-        let msg = `🎰 [ ${r1} | ${r2} | ${r3} ]\n`;
-        if (r1 === r2 && r2 === r3) {
-          if (r1 === "💎" || r1 === "7️⃣") win = bet * 10n;
-          else if (r1 === "🍀") win = bet * 5n;
-          else win = bet * 3n;
-          msg += `🎉 JACKPOT! Won ${format(win)}`;
-        } else if (r1 === r2 || r2 === r3 || r1 === r3) {
-          win = bet;
-          msg += `✨ Small win! +${format(win)}`;
-        } else {
-          win = -bet;
-          msg += `💸 Lost ${format(bet)}`;
+      // SLOTS
+      if (["slots", "slot"].includes(game)) {
+        const symbols = ["🍒", "🍋", "🍇", "⭐", "💎", "7️⃣"];
+        const spin = Array.from(
+          { length: 3 },
+          () => symbols[Math.floor(Math.random() * symbols.length)]
+        );
+
+        let multiplier = 0;
+
+        if (spin[0] === spin[1] && spin[1] === spin[2]) {
+          multiplier = spin[0] === "7️⃣" ? 10 :
+            spin[0] === "💎" ? 7 : 5;
+        } else if (
+          spin[0] === spin[1] ||
+          spin[1] === spin[2] ||
+          spin[0] === spin[2]
+        ) {
+          multiplier = 1.5;
         }
-        const newMoney = money + win;
-        await save(newMoney);
-        return message.reply(msg + `\n💵 Balance: ${format(newMoney)}`);
+
+        payout = multiplier === 1.5
+          ? (bet * 3n) / 2n
+          : bet * BigInt(multiplier);
+
+        title = "🎰 SLOT MACHINE";
+        details =
+          `╔══════════════╗\n` +
+          `║ ${spin.join("  ")} ║\n` +
+          `╚══════════════╝\n\n` +
+          (multiplier > 0
+            ? `🎉 Winning combination! ${multiplier}x payout`
+            : "💀 No match! You lost.");
       }
 
-      if (game === "bj" || game === "blackjack" || game === "21") {
-        const deck = [2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 11];
-        const draw = () => deck[Math.floor(Math.random() * deck.length)];
-        const p = draw() + draw();
-        const d = draw() + draw();
-        let win = 0n; let result = "";
-        if (p > 21 && d > 21) { win = -bet; result = `🃏 You: ${p} Dealer: ${d} BOTH BUST!\n💸 Lost ${format(bet)}`; }
-        else if (p === 21 && d !== 21) { win = bet * 3n / 2n; result = `🃏 BLACKJACK! You: 21 Dealer: ${d}\n🎉 Won ${format(win)}`; }
-        else if (p > 21) { win = -bet; result = `🃏 You: ${p} BUST! Dealer: ${d}\n💸 Lost ${format(bet)}`; }
-        else if (d > 21) { win = bet; result = `🃏 You: ${p} Dealer: ${d} BUST!\n✅ Won ${format(win)}`; }
-        else if (p > d) { win = bet; result = `🃏 You: ${p} Dealer: ${d}\n✅ Won ${format(win)}`; }
-        else if (p === d) { win = 0n; result = `🃏 You: ${p} Dealer: ${d}\n🤝 Push - no loss`; }
-        else { win = -bet; result = `🃏 You: ${p} Dealer: ${d}\n💸 Lost ${format(bet)}`; }
-        const newMoney = money + win;
-        await save(newMoney);
-        return message.reply(result + `\n💵 Balance: ${format(newMoney)}`);
+      // BLACKJACK - automatic dealer round
+      else if (["bj", "blackjack"].includes(game)) {
+        const deck = [];
+
+        for (const suit of ["♠", "♥", "♦", "♣"]) {
+          for (const rank of [
+            "A", "2", "3", "4", "5", "6", "7",
+            "8", "9", "10", "J", "Q", "K"
+          ]) {
+            deck.push({ rank, suit });
+          }
+        }
+
+        for (let i = deck.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [deck[i], deck[j]] = [deck[j], deck[i]];
+        }
+
+        const draw = () => deck.pop();
+
+        const value = card => {
+          if (["J", "Q", "K"].includes(card.rank)) return 10;
+          if (card.rank === "A") return 11;
+          return Number(card.rank);
+        };
+
+        const score = hand => {
+          let total = hand.reduce((sum, card) => sum + value(card), 0);
+          let aces = hand.filter(card => card.rank === "A").length;
+
+          while (total > 21 && aces > 0) {
+            total -= 10;
+            aces--;
+          }
+
+          return total;
+        };
+
+        const show = hand =>
+          hand.map(card => `${card.rank}${card.suit}`).join(" ");
+
+        const player = [draw(), draw()];
+        const dealer = [draw(), draw()];
+
+        let playerScore = score(player);
+        let dealerScore = score(dealer);
+
+        while (playerScore < 21 && dealerScore < 17) {
+          dealer.push(draw());
+          dealerScore = score(dealer);
+        }
+
+        const playerBJ = player.length === 2 && playerScore === 21;
+        const dealerBJ = dealer.length === 2 && dealerScore === 21;
+
+        if (playerBJ && !dealerBJ) {
+          payout = (bet * 5n) / 2n;
+          details = "🎉 BLACKJACK! You win 2.5x!";
+        } else if (playerScore > 21) {
+          payout = 0n;
+          details = "💀 Bust! You went over 21.";
+        } else if (dealerScore > 21 || playerScore > dealerScore) {
+          payout = bet * 2n;
+          details = "🎉 You beat the dealer!";
+        } else if (playerScore === dealerScore) {
+          payout = bet;
+          details = "🤝 Push! Your bet is returned.";
+        } else {
+          payout = 0n;
+          details = "💀 Dealer wins!";
+        }
+
+        title = "🃏 BLACKJACK";
+        details =
+          `Your cards: ${show(player)}\n` +
+          `Your score: ${playerScore}\n\n` +
+          `Dealer cards: ${show(dealer)}\n` +
+          `Dealer score: ${dealerScore}\n\n` +
+          details;
       }
 
-      if (game === "roulette" || game === "r") {
-        const pick = (args[2] || "").toLowerCase();
-        if (!pick) return message.reply(`❌ casino roulette <bet> <red/black/green/0-36>\nEx: casino roulette 500 red`);
-        const num = Math.floor(Math.random() * 37);
-        const isRed = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36].includes(num);
-        const color = num === 0 ? "green" : isRed ? "red" : "black";
-        let win = 0n; let result = `🎡 Roulette: ${num} ${color}\n`;
-        if (pick === color) { win = color === "green" ? bet * 14n : bet; result += `✅ Color hit! Won ${format(win)}`; }
-        else if (!isNaN(Number(pick)) && Number(pick) === num) { win = bet * 35n; result += `🎉 NUMBER JACKPOT! Won ${format(win)} (35x)`; }
-        else { win = -bet; result += `💸 Lost - you picked ${pick}`; }
-        const newMoney = money + win;
-        await save(newMoney);
-        return message.reply(result + `\n💵 Balance: ${format(newMoney)}`);
+      // ROULETTE
+      else if (game === "roulette") {
+        const number = Math.floor(Math.random() * 37);
+        const redNumbers = [
+          1, 3, 5, 7, 9, 12, 14, 16, 18,
+          19, 21, 23, 25, 27, 30, 32, 34, 36
+        ];
+
+        const color = number === 0
+          ? "green"
+          : redNumbers.includes(number) ? "red" : "black";
+
+        const valid = ["red", "black", "odd", "even"];
+
+        if (!valid.includes(choice) && !/^(0|[1-9]|[12]\d|3[0-6])$/.test(choice)) {
+          return message.reply(
+            "❌ Choose red, black, odd, even, or a number from 0 to 36."
+          );
+        }
+
+        let multiplier = 0;
+
+        if (choice === color) multiplier = 2;
+        else if (choice === "odd" && number !== 0 && number % 2 === 1) multiplier = 2;
+        else if (choice === "even" && number !== 0 && number % 2 === 0) multiplier = 2;
+        else if (/^\d+$/.test(choice) && Number(choice) === number) multiplier = 36;
+
+        payout = bet * BigInt(multiplier);
+
+        title = "🎡 ROULETTE";
+        details =
+          `Ball landed on: ${number} (${color.toUpperCase()})\n` +
+          `Your choice: ${choice}\n\n` +
+          (multiplier > 0
+            ? `🎉 You won ${multiplier}x!`
+            : "💀 Better luck next time!");
       }
 
-      if (game === "dice") {
-        const guess = Number(args[2]);
-        if (!guess || guess < 1 || guess > 6) return message.reply(`❌ casino dice <bet> <1-6>\nEx: casino dice 500 3`);
-        const roll = Math.floor(Math.random() * 6) + 1;
-        let win = 0n; let result = `🎲 Dice rolled: ${roll}\n`;
-        if (roll === guess) { win = bet * 9n / 2n; result += `🎉 Exact! Won ${format(win)} (4.5x)`; }
-        else { win = -bet; result += `💸 Lost - you guessed ${guess}`; }
-        const newMoney = money + win;
-        await save(newMoney);
-        return message.reply(result + `\n💵 Balance: ${format(newMoney)}`);
+      // DICE
+      else if (game === "dice") {
+        const playerRoll = Math.floor(Math.random() * 6) + 1;
+        const dealerRoll = Math.floor(Math.random() * 6) + 1;
+
+        if (playerRoll > dealerRoll) {
+          payout = bet * 2n;
+          details = "🎉 Your dice beat the casino!";
+        } else if (playerRoll === dealerRoll) {
+          payout = bet;
+          details = "🤝 It's a tie! Your bet is returned.";
+        } else {
+          payout = 0n;
+          details = "💀 The casino won!";
+        }
+
+        title = "🎲 DICE DUEL";
+        details =
+          `👤 Your roll: ${playerRoll}\n` +
+          `🏦 Casino roll: ${dealerRoll}\n\n` +
+          details;
       }
 
-      if (game === "coinflip" || game === "cf" || game === "flip") {
-        const pick = (args[2] || "").toLowerCase();
-        if (!["heads", "tails", "h", "t"].includes(pick)) return message.reply(`❌ casino coinflip <bet> <heads/tails>\nEx: casino coinflip 500 heads`);
-        const flip = Math.random() < 0.5 ? "heads" : "tails";
-        const normalizedPick = pick.startsWith("h") ? "heads" : "tails";
-        let win = 0n; let result = `🪙 Flip: ${flip}\n`;
-        if (flip === normalizedPick) { win = bet * 9n / 10n; result += `✅ Won ${format(win)}`; }
-        else { win = -bet; result += `💸 Lost ${format(bet)}`; }
-        const newMoney = money + win;
-        await save(newMoney);
-        return message.reply(result + `\n💵 Balance: ${format(newMoney)}`);
+      // COINFLIP
+      else if (game === "coinflip") {
+        if (!["heads", "tails"].includes(choice)) {
+          return message.reply("❌ Choose heads or tails.");
+        }
+
+        const result = Math.random() < 0.5 ? "heads" : "tails";
+        const won = result === choice;
+
+        payout = won ? bet * 2n : 0n;
+
+        title = "🪙 COINFLIP";
+        details =
+          `Your choice: ${choice}\n` +
+          `Coin landed: ${result}\n\n` +
+          (won ? "🎉 You won!" : "💀 You lost!");
       }
 
-      return message.reply(`❌ Unknown game ${game}\nUse: slots, bj, roulette, dice, coinflip`);
-    } catch (e) {
-      console.error("[CASINO] Error:", e.message);
-      return message.reply("❌ Casino failed. Try again.");
+      else {
+        return help();
+      }
+
+      // Update wallet: subtract bet, then add gross payout
+      const newWallet = wallet - bet + payout;
+
+      await usersData.set(userID, {
+        money: newWallet.toString()
+      });
+
+      const net = payout - bet;
+      const netText = net >= 0n
+        ? `+$${format(net)}`
+        : `-$${format(-net)}`;
+
+      return message.reply(
+        `${title}\n\n` +
+        `${details}\n\n` +
+        `🎲 Bet: $${format(bet)}\n` +
+        `💰 Net result: ${netText}\n` +
+        `💵 Wallet: $${format(newWallet)}`
+      );
+
+    } catch (error) {
+      console.error("Casino error:", error);
+      return message.reply("❌ Casino error. Please try again.");
     }
   }
 };
+    
