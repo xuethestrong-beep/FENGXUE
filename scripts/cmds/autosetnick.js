@@ -1,71 +1,159 @@
-function checkShortCut(nickname, uid, userName) {
-  /\{userName\}/gi.test(nickname) ? nickname = nickname.replace(/\{userName\}/gi, userName) : null;
-  /\{userID\}/gi.test(uid) ? nickname = nickname.replace(/\{userID\}/gi, uid) : null;
-  return nickname;
-}
 
 module.exports = {
   config: {
     name: "autosetnick",
-    aliases: ["autosetname", "autonick"],
-    version: "1.3",
+    aliases: ["autonick", "autosetname", "asn"],
+    version: "4.0",
     author: "FENG",
-    countDown: 5,
     role: 1,
-    description: "Auto change nickname of new member",
+    countDown: 3,
+    description: "Automatically gives every new member a fixed nickname",
     category: "box chat",
-    guide: "{pn} set <nickname>: set config to auto change nickname, shortcuts:\n+ {userName}: name of new member\n+ {userID}: member id\nExample: {pn} set {userName} 🚀\n\n{pn} [on | off]: turn on/off\n{pn} [view | info]: show current config"
+    guide:
+      "{pn} set <nickname>\n" +
+      "{pn} on\n" +
+      "{pn} off\n" +
+      "{pn} view"
   },
-  langs: {
-    en: {
-      missingConfig: "Please enter the required configuration",
-      configSuccess: "Configuration set successfully",
-      currentConfig: "Current autoSetNick config is:\n%1",
-      notSetConfig: "Group has not set autoSetNick config",
-      syntaxError: "Syntax error, only \"{pn} on\" or \"{pn} off\" can be used",
-      turnOnSuccess: "autoSetNick turned ON",
-      turnOffSuccess: "autoSetNick turned OFF",
-      error: "Error using autoSetNick, try turning off invite link and try again"
+
+  onStart: async function ({ message, event, args, threadsData }) {
+    const action = String(args[0] || "").toLowerCase();
+    const threadID = event.threadID;
+
+    if (action === "set") {
+      const nickname = args.slice(1).join(" ").trim();
+
+      if (!nickname) {
+        return message.reply(
+          "❌ Enter the nickname you want every new member to receive."
+        );
+      }
+
+      if (nickname.length > 50) {
+        return message.reply("❌ Nickname is too long. Maximum 50 characters.");
+      }
+
+      await threadsData.set(
+        threadID,
+        nickname,
+        "data.autoSetName"
+      );
+
+      return message.reply(
+        `✅ NEW MEMBER NICKNAME SAVED\n\n` +
+        `👤 Nickname: ${nickname}\n` +
+        `📌 Every new member will receive this nickname.`
+      );
     }
-  },
-  onStart: async function ({ message, event, args, threadsData, getLang }) {
-    switch (args[0]) {
-      case "set":
-      case "add":
-      case "config": {
-        if (args.length < 2) return message.reply(getLang("missingConfig"));
-        const configAutoSetName = args.slice(1).join(" ");
-        await threadsData.set(event.threadID, configAutoSetName, "data.autoSetName");
-        return message.reply(getLang("configSuccess"));
+
+    if (action === "on") {
+      const nickname = await threadsData.get(
+        threadID,
+        "data.autoSetName"
+      );
+
+      if (!nickname) {
+        return message.reply(
+          "❌ Set a nickname first.\nExample: autosetnick set FENG SAMA 🚀"
+        );
       }
-      case "view":
-      case "info": {
-        const configAutoSetName = await threadsData.get(event.threadID, "data.autoSetName");
-        return message.reply(configAutoSetName ? getLang("currentConfig", configAutoSetName) : getLang("notSetConfig"));
-      }
-      default: {
-        const enableOrDisable = args[0];
-        if (enableOrDisable !== "on" && enableOrDisable !== "off")
-          return message.reply(getLang("syntaxError"));
-        await threadsData.set(event.threadID, enableOrDisable === "on", "settings.enableAutoSetName");
-        return message.reply(enableOrDisable == "on" ? getLang("turnOnSuccess") : getLang("turnOffSuccess"));
-      }
+
+      await threadsData.set(
+        threadID,
+        true,
+        "settings.enableAutoSetName"
+      );
+
+      return message.reply(
+        `✅ AUTONICK ENABLED\n\nNew members will receive: ${nickname}`
+      );
     }
+
+    if (action === "off") {
+      await threadsData.set(
+        threadID,
+        false,
+        "settings.enableAutoSetName"
+      );
+
+      return message.reply("🔴 AUTONICK DISABLED.");
+    }
+
+    if (action === "view") {
+      const nickname = await threadsData.get(
+        threadID,
+        "data.autoSetName"
+      );
+
+      const enabled = await threadsData.get(
+        threadID,
+        "settings.enableAutoSetName"
+      );
+
+      return message.reply(
+        `⚙️ AUTONICK SETTINGS\n\n` +
+        `Status: ${enabled ? "🟢 ON" : "🔴 OFF"}\n` +
+        `Nickname: ${nickname || "Not configured"}`
+      );
+    }
+
+    return message.reply(
+      "📌 AUTOSETNICK COMMANDS\n\n" +
+      "autosetnick set FENG SAMA 🚀\n" +
+      "autosetnick on\n" +
+      "autosetnick off\n" +
+      "autosetnick view"
+    );
   },
-  onEvent: async ({ message, event, api, threadsData, getLang }) => {
-    if (event.logMessageType !== "log:subscribe") return;
-    if (!await threadsData.get(event.threadID, "settings.enableAutoSetName")) return;
-    const configAutoSetName = await threadsData.get(event.threadID, "data.autoSetName");
-    return async function () {
-      const addedParticipants = [...event.logMessageData.addedParticipants];
-      for (const user of addedParticipants) {
-        const { userFbId: uid, fullName: userName } = user;
+
+  onEvent: async function ({ event, api, threadsData }) {
+    try {
+      if (event.logMessageType !== "log:subscribe") return;
+
+      const threadID = event.threadID;
+
+      const enabled = await threadsData.get(
+        threadID,
+        "settings.enableAutoSetName"
+      );
+
+      if (!enabled) return;
+
+      const nickname = await threadsData.get(
+        threadID,
+        "data.autoSetName"
+      );
+
+      if (!nickname) return;
+
+      const participants =
+        event.logMessageData?.addedParticipants || [];
+
+      for (const user of participants) {
+        const uid = user.userFbId;
+
+        if (!uid) continue;
+
         try {
-          await api.changeNickname(checkShortCut(configAutoSetName, uid, userName), event.threadID, uid);
-        } catch (e) {
-          return message.reply(getLang("error"));
+          await api.changeNickname(
+            nickname,
+            threadID,
+            uid
+          );
+
+          console.log(
+            `[AUTOSETNICK] Set ${uid} nickname to ${nickname}`
+          );
+        } catch (error) {
+          console.error(
+            `[AUTOSETNICK] Failed for ${uid}:`,
+            error
+          );
         }
       }
-    };
+    } catch (error) {
+      console.error("[AUTOSETNICK ERROR]", error);
+    }
   }
 };
+        
