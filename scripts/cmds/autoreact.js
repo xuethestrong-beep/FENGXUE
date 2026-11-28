@@ -1,128 +1,243 @@
+
 const fs = require("fs-extra");
 const path = require("path");
-const filePath = path.join(__dirname, "cache", "autoreact.json");
-if (!fs.existsSync(path.join(__dirname, "cache"))) {
-  fs.mkdirSync(path.join(__dirname, "cache"), { recursive: true });
+
+const cacheDir = path.join(__dirname, "cache");
+const filePath = path.join(cacheDir, "autoreact.json");
+
+fs.ensureDirSync(cacheDir);
+
+function loadData() {
+  try {
+    if (!fs.existsSync(filePath)) {
+      fs.writeJsonSync(filePath, { targets: {} }, { spaces: 2 });
+    }
+
+    const raw = fs.readJsonSync(filePath);
+
+    // Current global format
+    if (raw && raw.targets && typeof raw.targets === "object") {
+      return raw;
+    }
+
+    // Migrate old per-thread format
+    const migrated = { targets: {} };
+
+    if (raw && typeof raw === "object") {
+      for (const key of Object.keys(raw)) {
+        const value = raw[key];
+
+        if (typeof value === "string") {
+          migrated.targets[String(value)] = "🩷";
+        } else if (value?.targetID) {
+          migrated.targets[String(value.targetID)] =
+            value.emoji || "🩷";
+        }
+      }
+    }
+
+    saveData(migrated);
+    return migrated;
+  } catch (error) {
+    console.error("[AUTOREACT LOAD]", error);
+    return { targets: {} };
+  }
 }
-if (!fs.existsSync(filePath)) {
-  fs.writeJsonSync(filePath, { targets: {} });
+
+function saveData(data) {
+  try {
+    fs.writeJsonSync(filePath, data, { spaces: 2 });
+    return true;
+  } catch (error) {
+    console.error("[AUTOREACT SAVE]", error);
+    return false;
+  }
+}
+
+function getTarget(event) {
+  if (event.messageReply?.senderID) {
+    return String(event.messageReply.senderID);
+  }
+
+  const mentions = Object.keys(event.mentions || {});
+  return mentions.length ? String(mentions[0]) : null;
 }
 
 module.exports = {
   config: {
     name: "autoreact",
     aliases: ["ar"],
-    version: "3.0",
-    author: "FengSama (fixed global)",
+    version: "4.0",
+    author: "FengSama",
     role: 1,
     countDown: 2,
     category: "fun",
-    guide: "{pn} [emoji]\n{pn} off\n{pn} list"
+    guide:
+      "{pn} [emoji] - Set autoreact\n" +
+      "{pn} on [emoji] - Enable autoreact\n" +
+      "{pn} off - Disable for a person\n" +
+      "{pn} off all - Disable everyone\n" +
+      "{pn} list - Show all targets"
   },
-  onStart: async function ({ api, event, args, message }) {
-    let data = fs.readJsonSync(filePath);
-    // ===== MIGRATE OLD per-thread format to global =====
-    if (!data.targets) {
-      data = { targets: {} };
-      // old format: { threadID: {targetID, emoji} } -> convert to global
-      const old = fs.readJsonSync(filePath);
-      for (const k in old) {
-        if (k === "targets") continue;
-        const v = old[k];
-        if (typeof v === "string") data.targets[v] = "🩷";
-        else if (v?.targetID) data.targets[v.targetID] = v.emoji || "🩷";
-      }
-      fs.writeJsonSync(filePath, data);
-    }
-    if (!data.targets) data.targets = {};
 
-    // ===== LIST =====
-    if (args[0] === "list") {
+  onStart: async function ({ api, event, args, message }) {
+    const data = loadData();
+    const action = String(args[0] || "").toLowerCase();
+
+    // LIST TARGETS
+    if (action === "list") {
       const ids = Object.keys(data.targets);
-      if (ids.length === 0) return message.reply("📋 No autoreact targets.\nReply to someone → autoreact 😂");
-      let msg = `📋 Autoreact GLOBAL (${ids.length})\n──────────────\n`;
+
+      if (!ids.length) {
+        return message.reply(
+          "📋 No autoreact targets yet.\n\n" +
+          "Reply to someone and use autoreact 😂"
+        );
+      }
+
+      let output =
+        `📋 GLOBAL AUTOREACT (${ids.length})\n` +
+        "━━━━━━━━━━━━━━\n";
+
       for (const id of ids) {
+        let name = id;
+
         try {
           const info = await api.getUserInfo(id);
-          msg += `• ${info[id]?.name || id} - ${data.targets[id]}\n`;
-        } catch { msg += `• ${id} - ${data.targets[id]}\n`; }
+          name = info?.[id]?.name || id;
+        } catch {}
+
+        output += `• ${name} — ${data.targets[id]}\n`;
       }
-      msg += `\n✅ Works in ANY GC`;
-      return message.reply(msg);
+
+      output += "\n🌐 Active in every group chat.";
+
+      return message.reply(output);
     }
 
-    // ===== OFF =====
-    if (args[0] === "off") {
-      // autoreact off (reply) = off for that person globally
-      // autoreact off all = off all
-      if (args[1] === "all") {
+    // TURN OFF
+    if (action === "off") {
+      if (String(args[1] || "").toLowerCase() === "all") {
         data.targets = {};
-        fs.writeJsonSync(filePath, data);
-        return message.reply("✅ autoreact OFF for ALL (all GCs)");
+
+        if (!saveData(data)) {
+          return message.reply("❌ Failed to save autoreact settings.");
+        }
+
+        return message.reply(
+          "✅ Autoreact disabled for everyone globally."
+        );
       }
-      let targetID = event.messageReply ? event.messageReply.senderID : Object.keys(event.mentions || {})[0];
+
+      const targetID = getTarget(event);
+
       if (!targetID) {
-        // if no reply, off last / all? Ask
-        return message.reply("Reply to their message → autoreact off\nOr: autoreact off all");
+        return message.reply(
+          "Reply to someone's message and use:\n" +
+          "autoreact off\n\n" +
+          "To disable everyone:\n" +
+          "autoreact off all"
+        );
       }
-      delete data.targets[String(targetID)];
-      fs.writeJsonSync(filePath, data);
-      return message.reply("✅ autoreact OFF for them (all GCs)");
+
+      if (!data.targets[targetID]) {
+        return message.reply("ℹ️ That person doesn't have autoreact enabled.");
+      }
+
+      delete data.targets[targetID];
+
+      if (!saveData(data)) {
+        return message.reply("❌ Failed to save autoreact settings.");
+      }
+
+      return message.reply(
+        "✅ Autoreact disabled for that person in all group chats."
+      );
     }
 
-    // ===== ON =====
-    let emoji = args[0] || "🩷";
-    if (args[0] === "on") emoji = args[1] || "🩷";
-    // if user typed: autoreact on 😂
-    if (args[0] === "on" && args[1]) emoji = args[1];
+    // ENABLE / CHANGE EMOJI
+    let emoji = "🩷";
 
-    let targetID = event.messageReply ? event.messageReply.senderID : Object.keys(event.mentions || {})[0];
+    if (action === "on") {
+      emoji = args.slice(1).join(" ").trim() || "🩷";
+    } else if (args.length) {
+      emoji = args.join(" ").trim();
+    }
 
-    // If no target but already have targets, change emoji for all? No - change for first target if only 1
+    if (!emoji || emoji.length > 30) {
+      return message.reply("❌ Please provide a valid emoji.");
+    }
+
+    const targetID = getTarget(event);
+
+    // No target: allow changing emoji only when one target exists
     if (!targetID) {
       const ids = Object.keys(data.targets);
-      if (ids.length === 1 && args[0]) {
-        data.targets[ids[0]] = args[0];
-        fs.writeJsonSync(filePath, data);
-        return message.reply(`✅ react changed to ${args[0]} (GLOBAL - all GCs)`);
+
+      if (ids.length === 1 && args.length && action !== "on") {
+        data.targets[ids[0]] = emoji;
+
+        if (!saveData(data)) {
+          return message.reply("❌ Failed to save autoreact settings.");
+        }
+
+        return message.reply(
+          `✅ Autoreact emoji changed to ${emoji} globally.`
+        );
       }
-      if (ids.length > 1 && args[0]) {
-        return message.reply("Reply to who? May multiple targets ka.\nReply to them → autoreact 😂");
-      }
-      return message.reply("Reply to a message → autoreact\nReply → autoreact 😂 to set custom\nReply → autoreact off to stop\n autoreact list to see all");
+
+      return message.reply(
+        "Reply to someone's message and use:\n\n" +
+        "autoreact\n" +
+        "autoreact 😂\n" +
+        "autoreact on ❤️\n\n" +
+        "Use autoreact list to view targets."
+      );
     }
 
-    // ===== SAVE GLOBALLY - NOT PER THREAD =====
-    data.targets[String(targetID)] = emoji;
-    fs.writeJsonSync(filePath, data);
+    data.targets[targetID] = emoji;
+
+    if (!saveData(data)) {
+      return message.reply("❌ Failed to save autoreact settings.");
+    }
 
     let name = targetID;
+
     try {
       const info = await api.getUserInfo(targetID);
-      name = info[targetID]?.name || targetID;
+      name = info?.[targetID]?.name || targetID;
     } catch {}
-    return message.reply(`✅ autoreact ON for ${name}\nReact: ${emoji}\n🌐 GLOBAL - works in ANY GC`);
+
+    return message.reply(
+      `✅ AUTOREACT ENABLED\n\n` +
+      `👤 Target: ${name}\n` +
+      `💗 Reaction: ${emoji}\n` +
+      `🌐 Scope: All group chats`
+    );
   },
+
   onChat: async function ({ api, event }) {
     try {
-      if (!event.messageID) return;
-      const data = fs.readJsonSync(filePath);
-      // Support both new global + old per-thread (for safety)
-      let emoji = null;
+      if (!event.messageID || !event.senderID) return;
 
-      // 1. NEW GLOBAL - priority
-      if (data.targets && data.targets[String(event.senderID)]) {
-        emoji = data.targets[String(event.senderID)];
-      }
-      // 2. OLD per-thread fallback
-      else if (data[event.threadID]) {
-        const td = data[event.threadID];
-        const tid = typeof td === "string" ? td : td.targetID;
-        if (String(event.senderID) === String(tid)) emoji = typeof td === "string" ? "🩷" : (td.emoji || "🩷");
-      }
+      const data = loadData();
+      const senderID = String(event.senderID);
+
+      const emoji = data.targets[senderID];
 
       if (!emoji) return;
-      api.setMessageReaction(emoji, event.messageID, () => {}, true);
-    } catch {}
+
+      await Promise.resolve(
+        api.setMessageReaction(
+          emoji,
+          event.messageID,
+          () => {},
+          true
+        )
+      );
+    } catch (error) {
+      console.error("[AUTOREACT EVENT]", error);
+    }
   }
 };
+        
